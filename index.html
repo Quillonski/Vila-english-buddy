@@ -793,6 +793,16 @@ function diffWords(target,typed){
   const valid=tn.filter(Boolean).length||1;
   return {html,score:hit.filter((h,k)=>h&&tn[k]).length/valid};
 }
+// Tatoeba sirve el mismo audio en dos direcciones; se prueba la de mp3 directo primero
+const goodSrc={};
+async function playSentence(s,rate){
+  const urls=[...new Set([goodSrc[s.id], s.id?`https://audio.tatoeba.org/sentences/eng/${s.id}.mp3`:"", s.audio].filter(Boolean))];
+  let last;
+  for(const u of urls){
+    try{ await playUrl(u,rate); goodSrc[s.id]=u; $("genStatus").textContent=""; return }catch(e){ last=e }
+  }
+  throw last||new Error("sin audio");
+}
 function renderListen(){
   const out=$("genOut"); out.innerHTML=""; const s=lis.list[lis.i];
   const d=document.createElement("div"); d.className="gen";
@@ -807,8 +817,8 @@ function renderListen(){
     <p class="mic-out" style="margin:0">Voz: ${s.attr?`<a href="${esc(s.attr)}" target="_blank" rel="noopener">${who}</a>`:who}${(s.license||s.licence)?" · "+esc(s.license||s.licence):""} · <a href="https://tatoeba.org/en/sentences/show/${encodeURIComponent(s.id)}" target="_blank" rel="noopener">Tatoeba</a></p>`;
   const q=k=>d.querySelector(`[data-a="${k}"]`);
   const audioErr=()=>{ $("genStatus").textContent="No pude reproducir este audio. Prueba con la siguiente frase." };
-  q("p").onclick=()=>playUrl(s.audio,1).catch(audioErr);
-  q("sl").onclick=()=>playUrl(s.audio,0.7).catch(audioErr);
+  q("p").onclick=()=>playSentence(s,1).catch(audioErr);
+  q("sl").onclick=()=>playSentence(s,0.7).catch(audioErr);
   const res=q("res");
   const reveal=html=>{
     res.innerHTML=(html||`<p class="es" style="margin:8px 0 0">${esc(s.text)}</p>`)+(s.es?`<p class="ex">${esc(s.es)}</p>`:"");
@@ -823,7 +833,7 @@ function renderListen(){
   d.querySelector("#dict").addEventListener("keydown",e=>{ if(e.key==="Enter") q("c").click() });
   q("r").onclick=()=>reveal("");
   q("n").onclick=()=>{
-    if(lis.i+1<lis.list.length){ lis.i++; renderListen(); setTimeout(()=>playUrl(lis.list[lis.i].audio,1).catch(()=>{}),50) }
+    if(lis.i+1<lis.list.length){ lis.i++; renderListen(); setTimeout(()=>playSentence(lis.list[lis.i],1).catch(()=>{}),50) }
     else out.innerHTML=`<div class="gen"><h3>Entendiste ${lis.ok} de ${lis.list.length} frases</h3><p class="ex">El oído se acostumbra con la práctica. Prueba otra ronda u otro tema.</p></div>`;
   };
   out.appendChild(d);
