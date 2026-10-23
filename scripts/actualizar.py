@@ -1,95 +1,15 @@
-Claude
-Ejecutó 4 comandos
-
-Ya vi el problema. Revisé tu repositorio y el archivo del descargador quedó mal en dos cosas:
-
-    Se llama actualizar.py., con un punto extra al final.
-    Está vacío: el contenido no se pegó.
-
-Por eso la tarea falló a los 5 segundos: no encontró el programa. La app y la tarea automática sí quedaron perfectas.
-
-Para arreglarlo sin copiar y pegar:
-
-    En el repositorio, entra a la carpeta scripts.
-    Ya dentro de la carpeta, toca Add file → Upload files.
-    Sube el archivo actualizar.py que te mandé. Como estás dentro de scripts, se guarda ahí.
-    Toca Commit changes.
-    Ahora borra el archivo malo: dentro de scripts, toca actualizar.py. (el del punto), luego los ··· de arriba a la derecha, Delete file y confirma con Commit changes.
-
-Al subir el archivo correcto, la descarga debería arrancar sola. Si no, ve a Actions → Actualizar frases y audios → Run workflow.
-
-Las otras dos advertencias de la captura (Node.js 20 y Ubuntu 26) son avisos de GitHub sobre versiones. No afectan nada.
-
-Cuando termines me avisas y reviso que la carpeta data se haya creado bien.
-1792719978779_imagen.png
-
-es normal esto?
-
-Sí, es normal. El círculo amarillo significa que está trabajando, y lo que ves es solo la configuración del paso.
-
-Ahora mismo GitHub está:
-
-    buscando frases grabadas en Tatoeba para los 8 temas,
-    armando el banco de palabras con Datamuse,
-    buscando las pronunciaciones reales en el diccionario.
-
-Son unas 500 consultas con pausas entre cada una para no saturar esos servicios, así que puede tardar entre 5 y 10 minutos.
-
-Es posible que no veas ningún mensaje nuevo mientras trabaja. GitHub guarda los mensajes del programa y los muestra todos juntos al final, así que no te preocupes si parece congelado.
-
-Cuando termine:
-
-    El paso debería quedar con ✅ y mostrar algo como “Listo: 900 frases, 380 palabras, 400 pronunciaciones”.
-    El siguiente paso, Guardar en el repositorio, crea la carpeta data.
-    Pocos minutos después se publica y la app ya usa las frases y voces reales.
-
-Avísame cuando termine o si sale alguna ❌.
-1792720258177_imagen.png
-Switching to alternate sources for audio and definitions.
-
-Ese error (HTTP 530) viene del servidor del diccionario: el sitio del diccionario está caído o rechazando conexiones. Eso también explica por qué la “voz nativa” no funcionaba en el teléfono de Vila. No es algo de tu configuración.
-
-Cancela esa tarea, porque se va a quedar reintentando: arriba a la derecha toca Cancel workflow. Mientras tanto cambio el diccionario por otra fuente más confiable. Reviso que funcione.
-Compartió 2 archivos, leyó 2 páginas, ejecutó 3 comandos
-
-Listo. Ya no dependemos del diccionario caído. Ahora las fuentes son:
-
-    Datamuse: palabras por tema, con definición y pronunciación escrita.
-    Wikimedia Commons: el archivo de audios de Wikipedia, con grabaciones reales de palabras en inglés americano.
-    Tatoeba: frases grabadas por personas y ejemplos con traducción al español.
-
-Qué hacer:
-
-    Si la tarea anterior sigue corriendo, cancélala: Cancel workflow, arriba a la derecha.
-    Entra a la carpeta scripts y sube el nuevo actualizar.py con Add file → Upload files → Commit changes. Reemplaza al anterior.
-    En la página principal del repositorio, sube también el nuevo index.html de la misma forma.
-    Al subir el script, la descarga arranca sola. Si no, ve a Actions → Actualizar frases y audios → Run workflow.
-
-Esta vez sí deberías ver mensajes mientras trabaja (Tema: Crimen y juicios, Tema: Abogados…). Tarda unos 5 a 10 minutos.
-
-Si alguna fuente falla, el descargador ya no se queda pegado reintentando: sigue con lo demás y no borra datos buenos.
-
-Probé el descargador simulando las respuestas y funciona, pero no puedo conectarme a esos sitios desde aquí. Si ves errores en los mensajes, mándame una captura.
-Actualizar
-PY 
-Index
-Código·HTML 
-
-
-Claude es una IA y puede cometer errores.
-Actualizar · PY
 """Descarga frases con audio (Tatoeba), palabras por tema (Datamuse) y
 pronunciaciones grabadas por personas (Wikimedia Commons) y las guarda en data/.
 La app las lee desde el mismo sitio, así el navegador no bloquea nada.
 Lo ejecuta GitHub Actions; no hace falta correrlo a mano."""
 import json, random, re, time, urllib.parse, urllib.request
 from pathlib import Path
- 
+
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 DATA.mkdir(exist_ok=True)
 UA = {"User-Agent": "ingles-para-vila/1.0 (proyecto personal de práctica de inglés)"}
- 
+
 TOPIC_SEEDS = {
     "Crimen y juicios": ["crime", "court", "police", "prison", "trial"],
     "Abogados": ["lawyer", "law", "judge", "contract", "court"],
@@ -100,8 +20,8 @@ TOPIC_SEEDS = {
     "Detectives": ["detective", "clue", "murder", "investigation", "suspect"],
     "Viajes": ["travel", "airport", "hotel", "trip", "ticket"],
 }
- 
- 
+
+
 def get_json(url, tries=3):
     for i in range(tries):
         try:
@@ -120,16 +40,16 @@ def get_json(url, tries=3):
             print("  error", e, url, flush=True)
         time.sleep(2 * (i + 1))
     return None
- 
- 
+
+
 def flat(x):
     if isinstance(x, list):
         for y in x:
             yield from flat(y)
     elif isinstance(x, dict):
         yield x
- 
- 
+
+
 # ---------- frases con audio ----------
 def frases_de(seeds):
     out, seen = [], set()
@@ -156,12 +76,12 @@ def frases_de(seeds):
         time.sleep(0.5)
     random.shuffle(out)
     return out[:120]
- 
- 
+
+
 # ---------- palabras: datos, voz real y ejemplos ----------
 POS = {"n": "noun", "v": "verb", "adj": "adjective", "adv": "adverb"}
- 
- 
+
+
 def info_de_datamuse(r):
     tags = r.get("tags", [])
     ipa = next((t[9:] for t in tags if t.startswith("ipa_pron:")), "")
@@ -177,8 +97,8 @@ def info_de_datamuse(r):
         pos = next((POS[t] for t in tags if t in POS), "")
     return {"word": r.get("word", ""), "ipa": "/" + ipa + "/" if ipa else "", "def": definition, "pos": pos,
             "example": "", "es_example": "", "audio": ""}
- 
- 
+
+
 def voces_reales(words):
     """Grabaciones de Wikimedia Commons (archivos En-us-<palabra>.ogg), en mp3 cuando existe."""
     out = {}
@@ -204,8 +124,8 @@ def voces_reales(words):
                 out[m.group(1).lower()] = url
         time.sleep(0.5)
     return out
- 
- 
+
+
 def ejemplo_de(word):
     q = urllib.parse.urlencode({"lang": "eng", "q": word, "word_count": "4-12", "trans:lang": "spa",
                                 "sort": "random", "limit": "10"})
@@ -219,8 +139,8 @@ def ejemplo_de(word):
         if es:
             return text, es
     return "", ""
- 
- 
+
+
 # ---------- banco de palabras ----------
 def palabras_de(seeds, conocidas):
     pool = {}
@@ -245,26 +165,26 @@ def palabras_de(seeds, conocidas):
         c["example"], c["es_example"] = ejemplo_de(c["word"])
     cands.sort(key=lambda r: (0 if r["audio"] else 1, 0 if r["example"] else 1))
     return cands[:50]
- 
- 
+
+
 def main():
     html = (ROOT / "index.html").read_text(encoding="utf-8")
     vocab = sorted(set(re.findall(r'\["([a-z][a-z\']+)","/', html)))
     print(f"Palabras de la app: {len(vocab)}")
- 
+
     frases, palabras = {}, {}
     for topic, seeds in TOPIC_SEEDS.items():
         print("Tema:", topic, flush=True)
         frases[topic] = frases_de(seeds)
         palabras[topic] = palabras_de(seeds, set(vocab))
         print(f"  {len(frases[topic])} frases, {len(palabras[topic])} palabras")
- 
+
     pron = {w: {"audio": u} for w, u in voces_reales(vocab).items()}
     for lst in palabras.values():
         for r in lst:
             if r["audio"]:
                 pron[r["word"]] = {"audio": r["audio"], "ipa": r["ipa"]}
- 
+
     # No reemplazar datos buenos con una descarga vacía (si una fuente estuvo caída)
     def guardar(nombre, nuevo, minimo):
         p = DATA / nombre
@@ -272,14 +192,12 @@ def main():
             print("  ", nombre, "vino casi vacío; se conserva la versión anterior")
             return
         p.write_text(json.dumps(nuevo, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
- 
+
     guardar("frases.json", frases, 40)
     guardar("palabras.json", palabras, 40)
     guardar("pronunciacion.json", pron, 10)
     print("Listo:", sum(map(len, frases.values())), "frases,", sum(map(len, palabras.values())), "palabras,", len(pron), "pronunciaciones")
- 
- 
+
+
 if __name__ == "__main__":
     main()
- 
-Claude terminó la respuesta
