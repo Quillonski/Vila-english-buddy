@@ -1,0 +1,41 @@
+name: Actualizar frases y audios
+
+on:
+  workflow_dispatch:        # botón "Run workflow" en la pestaña Actions
+  schedule:
+    - cron: "17 9 * * 1"    # cada lunes, para que Vila tenga frases nuevas
+  push:
+    paths:
+      - "scripts/actualizar.py"
+
+permissions:
+  contents: write
+  pages: write
+
+jobs:
+  actualizar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Descargar frases, palabras y pronunciaciones
+        run: python scripts/actualizar.py
+      - name: Guardar en el repositorio
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data
+          if git diff --cached --quiet; then
+            echo "Sin cambios"
+          else
+            git commit -m "Actualizar frases y audios"
+            git push
+            # pedir a GitHub Pages que publique la versión con los datos nuevos
+            curl -s -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/pages/builds" || true
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
