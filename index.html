@@ -71,6 +71,25 @@ select{font:500 15px var(--body);padding:8px 10px;border-radius:10px;border:1px 
 .big-play{width:84px;height:84px;border-radius:50%;border:0;background:var(--red);color:var(--card);font-size:30px;cursor:pointer;align-self:center}
 .center{text-align:center;align-items:center}
 .mic-out{font-size:15px;color:var(--muted)}
+.seg{display:grid;grid-template-columns:1fr 1fr;gap:6px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:5px}
+.seg button{font:600 15px var(--body);border:0;background:transparent;color:var(--muted);padding:9px 4px;border-radius:10px;cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--soft);color:var(--blue)}
+.pill{background:var(--soft);color:var(--blue);border-radius:999px;padding:3px 10px;font-size:13px;font-weight:700}
+.prompt{font-family:var(--display);font-size:22px;line-height:1.35;margin:0;overflow-wrap:anywhere}
+.choices.one{grid-template-columns:1fr}
+.choices.one .choice{font-size:16px;text-align:left;padding:12px 14px}
+.answer-line{min-height:52px;border:2px dashed var(--line);border-radius:12px;padding:8px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.tokens{display:flex;flex-wrap:wrap;gap:8px}
+.token{font:600 16px var(--body);padding:8px 12px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink);cursor:pointer}
+.token.on{background:var(--soft);border-color:var(--blue);color:var(--blue)}
+.big-score{font-family:var(--display);font-size:56px;line-height:1;margin:4px 0 0;color:var(--blue);font-variant-numeric:tabular-nums}
+.skills{display:flex;flex-direction:column;gap:10px}
+.skill .num{font-variant-numeric:tabular-nums;color:var(--muted)}
+.misses{display:flex;flex-direction:column;gap:8px}
+.miss{display:flex;gap:10px;align-items:center;justify-content:space-between;background:var(--soft);border-radius:12px;padding:10px 12px;font-size:15px}
+.btn.rec{background:var(--badbg);border-color:var(--bad);color:var(--bad);animation:pulse 1.2s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.55}}
+@media (prefers-reduced-motion:reduce){.btn.rec{animation:none}}
 .topics{display:flex;flex-wrap:wrap;gap:8px}
 .topic{font:600 14px var(--body);padding:7px 12px;border-radius:999px;border:1px solid var(--line);background:var(--card);color:var(--ink);cursor:pointer}
 .topic[aria-pressed="true"]{background:var(--blue);border-color:var(--blue);color:var(--card)}
@@ -145,7 +164,7 @@ footer{color:var(--muted);font-size:13px;text-align:center}
       </div>
       <div class="row" id="micRow">
         <button class="btn" id="micBtn">🎙 Decirla en voz alta</button>
-        <span class="mic-out" id="micOut"></span>
+        <div class="mic-out" id="micOut" style="flex-basis:100%"></div>
       </div>
       <div class="row" id="rate" hidden>
         <button class="btn no" id="again">Repasar otra vez</button>
@@ -172,14 +191,32 @@ footer{color:var(--muted);font-size:13px;text-align:center}
 
   <!-- QUIZ -->
   <section class="panel" id="p-quiz" hidden>
-    <div class="progress"><span id="quizBar" style="width:0"></span></div>
-    <div class="card">
-      <span class="label" id="quizCount"></span>
-      <p class="es" id="qPrompt"></p>
-      <div class="choices" id="qChoices"></div>
-      <div class="feedback" id="qFb"></div>
-      <div class="tip" id="qTip" hidden></div>
-      <button class="btn primary" id="qNext" hidden>Siguiente</button>
+    <div class="seg"><button id="qm-fast" aria-pressed="true">Quiz rápido</button><button id="qm-reto" aria-pressed="false">Reto completo</button></div>
+    <div class="panel" id="quizFast">
+      <div class="progress"><span id="quizBar" style="width:0"></span></div>
+      <div class="card">
+        <span class="label" id="quizCount"></span>
+        <p class="es" id="qPrompt"></p>
+        <div class="choices" id="qChoices"></div>
+        <div class="feedback" id="qFb"></div>
+        <div class="tip" id="qTip" hidden></div>
+        <button class="btn primary" id="qNext" hidden>Siguiente</button>
+      </div>
+    </div>
+    <div class="panel" id="quizReto" hidden>
+      <div class="card" id="retoSetup">
+        <span class="label">Reto completo</span>
+        <p style="margin:0">Preguntas mezcladas con voces reales: escuchar frases, vocabulario en contexto, ordenar oraciones, escribir lo que oyes y pronunciar con el micrófono. Al final ves en qué estás fuerte y qué repasar.</p>
+        <div class="row">
+          <label class="label" for="retoTopic">Tema</label><select id="retoTopic"></select>
+          <label class="label" for="retoLen">Preguntas</label><select id="retoLen"><option>10</option><option selected>15</option><option>20</option></select>
+        </div>
+        <label for="retoMic" style="display:flex;gap:10px;align-items:center"><input type="checkbox" id="retoMic" checked style="flex:none"> <span id="retoMicLbl">Incluir pronunciación con micrófono</span></label>
+        <div class="row"><button class="btn primary" id="retoStart">Empezar reto</button></div>
+        <div class="status" id="retoBest"></div>
+      </div>
+      <div class="progress" id="retoBarWrap" hidden><span id="retoBar" style="width:0"></span></div>
+      <div class="card" id="retoQ" hidden></div>
     </div>
   </section>
 
@@ -221,7 +258,7 @@ footer{color:var(--muted);font-size:13px;text-align:center}
     <div class="gen-list" id="genOut"></div>
   </section>
 
-  <footer>Hecho con mucho cariño para Vila 🌿<br>Frases y audios: <a href="https://tatoeba.org" target="_blank" rel="noopener">Tatoeba</a> (CC BY) · Palabras: <a href="https://www.datamuse.com/api/" target="_blank" rel="noopener">Datamuse</a> · Diccionario: <a href="https://dictionaryapi.dev" target="_blank" rel="noopener">Free Dictionary API</a></footer>
+  <footer>Hecho con mucho cariño para Vila 🌿<br>Frases y audios: <a href="https://tatoeba.org" target="_blank" rel="noopener">Tatoeba</a> (CC BY) · Palabras: <a href="https://www.datamuse.com/api/" target="_blank" rel="noopener">Datamuse</a> · Voces de palabras: <a href="https://commons.wikimedia.org" target="_blank" rel="noopener">Wikimedia Commons</a></footer>
 </div>
 
 <script>
@@ -459,23 +496,59 @@ function nextCard(){ idx=(idx+1)%deck.length; if(idx===0){cardBar.style.width="1
 $("gotIt").addEventListener("click",()=>{known.add(deck[idx][0]);store.set("known",[...known]);renderStats();touchStreak();nextCard()});
 $("again").addEventListener("click",()=>{deck.push(deck[idx]);touchStreak();nextCard()});
 
-// microphone: works where the browser allows it; otherwise a self-check fallback
+// ---------- micrófono (reconocimiento de voz del navegador) ----------
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-$("micBtn").addEventListener("click",()=>{
-  const target=deck[idx][0].toLowerCase();
-  if(!SR){micOut.textContent="Tu navegador no permite el micrófono aquí. Escuchala, repetila en voz alta 3 veces y compará.";return}
-  let rec; try{rec=new SR()}catch(e){micOut.textContent="El micrófono no está disponible. Repetila en voz alta y compará con el audio.";return}
-  rec.lang="en-US"; rec.maxAlternatives=5; rec.interimResults=false;
-  micOut.textContent="Escuchando…";
-  rec.onresult=e=>{
-    const alts=[...e.results[0]].map(a=>a.transcript.toLowerCase().trim());
-    const hit=alts.some(a=>a.replace(/[^a-z ]/g,"")===target.replace(/[^a-z ]/g,"")||a.includes(target));
-    micOut.textContent = hit ? "¡Perfecto! Se entendió “"+deck[idx][0]+"” 🎉" : "Se entendió “"+alts[0]+"”. Escuchala de nuevo en voz lenta y probá otra vez.";
-    touchStreak();
+const MIC_NONE="Este navegador no reconoce la voz. Usa Chrome (Android o computadora) o Safari (iPhone).";
+const MIC_ERR={
+  "not-allowed":"El navegador bloqueó el micrófono. Toca el candado 🔒 junto a la dirección de la página y permite el micrófono.",
+  "service-not-allowed":"El reconocimiento de voz está desactivado. En iPhone, activa Siri y Dictado en Ajustes; en Chrome, permite el micrófono para esta página.",
+  "no-speech":"No escuché nada. Toca el micrófono y habla cerca del teléfono.",
+  "audio-capture":"No encontré un micrófono en este dispositivo.",
+  "network":"El reconocimiento de voz necesita internet. Revisa la conexión.",
+  "language-not-supported":"Este navegador no reconoce inglés por voz.",
+  "aborted":"Se detuvo antes de escucharte. Toca el micrófono otra vez."
+};
+let activeRec=null;
+function listenOnce(){
+  return new Promise((resolve,reject)=>{
+    if(!SR) return reject({code:"unsupported"});
+    let rec; try{ rec=new SR() }catch(e){ return reject({code:"unsupported"}) }
+    rec.lang="en-US"; rec.maxAlternatives=5; rec.interimResults=false; rec.continuous=false;
+    let got=null, failed=null; activeRec=rec;
+    rec.onresult=e=>{ got=[...e.results[0]].map(a=>a.transcript.trim()).filter(Boolean) };
+    rec.onerror=e=>{ failed=e.error||"error" };
+    rec.onend=()=>{ activeRec=null; if(got&&got.length) resolve(got); else reject({code:failed||"no-speech"}) };
+    if(typeof stopAll==="function") stopAll();
+    try{ rec.start() }catch(e){ activeRec=null; reject({code:"error"}) }
+  });
+}
+function scoreSpeech(target,alts){
+  let best={score:-1,html:"",heard:""};
+  for(const a of alts){ const d=diffWords(target,a); if(d.score>best.score) best={...d,heard:a} }
+  return best;
+}
+function speechFeedback(r){
+  const pct=Math.round(r.score*100);
+  const msg=pct>=90?"¡Excelente pronunciación! 🎉":pct>=70?"¡Muy bien! Se entendió casi todo.":pct>=40?"Vas bien. Escucha el audio lento y repite.":"Casi no se entendió. Escúchala despacio y prueba otra vez.";
+  return `<div class="feedback ${pct>=70?"good":"badc"}">${msg} (${pct}%)</div><p class="diff" style="font-size:17px">${r.html}</p><p class="mic-out" style="margin:0">Se entendió: “${esc(r.heard)}”</p>`;
+}
+// Convierte un botón en "toca para hablar / toca para terminar"
+function micButton(btn,getTarget,out,opts={}){
+  const label=btn.textContent;
+  btn.onclick=async()=>{
+    if(activeRec){ try{ activeRec.stop() }catch(e){} return }
+    if(!SR){ out.textContent=MIC_NONE; return }
+    btn.classList.add("rec"); btn.textContent="🔴 Te escucho… toca para terminar"; out.textContent="";
+    try{
+      const r=scoreSpeech(getTarget(),await listenOnce());
+      out.innerHTML=speechFeedback(r); if(opts.onResult) opts.onResult(r);
+    }catch(e){
+      out.textContent=e.code==="unsupported"?MIC_NONE:(MIC_ERR[e.code]||"No pude usar el micrófono. Intenta otra vez.");
+      if(opts.onError) opts.onError(e);
+    }finally{ btn.classList.remove("rec"); btn.textContent=label }
   };
-  rec.onerror=()=>{micOut.textContent="No pude usar el micrófono. Repetila en voz alta 3 veces y compará con el audio."};
-  try{rec.start()}catch(e){micOut.textContent="No pude usar el micrófono aquí. Repetila en voz alta y compará."}
-});
+}
+micButton($("micBtn"),()=>deck[idx][0],micOut,{onResult:()=>touchStreak()});
 
 // ---------- ear training ----------
 const pairSel=$("pairSet"); Object.keys(PAIRS).forEach(p=>pairSel.add(new Option(p,p)));
@@ -813,6 +886,8 @@ function renderListen(){
     <input type="text" id="dict" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Escribe en inglés…">
     <div class="row"><button class="btn primary" data-a="c">Revisar</button><button class="btn" data-a="r">Ver la frase</button></div>
     <div data-a="res" hidden></div>
+    <div class="row"><button class="btn" data-a="mic">🎙 Repetirla en voz alta</button></div>
+    <div data-a="micout"></div>
     <div class="row" data-a="nav" hidden><button class="btn primary" data-a="n">${lis.i+1<lis.list.length?"Siguiente frase":"Ver resultado"}</button></div>
     <p class="mic-out" style="margin:0">Voz: ${s.attr?`<a href="${esc(s.attr)}" target="_blank" rel="noopener">${who}</a>`:who}${(s.license||s.licence)?" · "+esc(s.license||s.licence):""} · <a href="https://tatoeba.org/en/sentences/show/${encodeURIComponent(s.id)}" target="_blank" rel="noopener">Tatoeba</a></p>`;
   const q=k=>d.querySelector(`[data-a="${k}"]`);
@@ -832,6 +907,7 @@ function renderListen(){
   };
   d.querySelector("#dict").addEventListener("keydown",e=>{ if(e.key==="Enter") q("c").click() });
   q("r").onclick=()=>reveal("");
+  micButton(q("mic"),()=>s.text,q("micout"),{onResult:()=>touchStreak()});
   q("n").onclick=()=>{
     if(lis.i+1<lis.list.length){ lis.i++; renderListen(); setTimeout(()=>playSentence(lis.list[lis.i],1).catch(()=>{}),50) }
     else out.innerHTML=`<div class="gen"><h3>Entendiste ${lis.ok} de ${lis.list.length} frases</h3><p class="ex">El oído se acostumbra con la práctica. Prueba otra ronda u otro tema.</p></div>`;
@@ -903,6 +979,187 @@ $("testVoice").onclick=()=>{
   stopAll(); geminiSpeak("Hi Vila! Let's practice some English today.").then(url=>{const a=new Audio(url);curAudio=a;a.play();$("setStatus").textContent=""})
     .catch(e=>$("setStatus").textContent=e.code==="bad_model"?"El modelo de voz no respondió. Revisa su nombre.":"No pude generar la voz ahora; se usará la del navegador.");
 };
+
+// ---------- reto completo ----------
+const SKILLS={listen:"Escucha",vocab:"Vocabulario",grammar:"Orden de la frase",speak:"Pronunciación"};
+const QTYPES={
+  listen_choose:{skill:"listen",title:"Escucha y elige la frase exacta"},
+  listen_meaning:{skill:"listen",title:"Escucha: ¿qué significa?"},
+  spell:{skill:"listen",title:"Escucha la palabra y escríbela"},
+  translate:{skill:"vocab",title:"¿Cómo se dice en inglés?"},
+  blank:{skill:"vocab",title:"Completa la frase"},
+  definition:{skill:"vocab",title:"¿Qué palabra es?"},
+  order:{skill:"grammar",title:"Ordena la frase"},
+  speak:{skill:"speak",title:"Dilo en voz alta"}
+};
+let reto=null;
+const wc=t=>t.split(/\s+/).filter(Boolean).length;
+const pick=a=>a[Math.floor(Math.random()*a.length)];
+
+(function setupReto(){
+  const sel=$("retoTopic"); sel.add(new Option("Todos los temas","*")); TOPICS.forEach(t=>sel.add(new Option(t,t)));
+  if(!SR){ $("retoMic").checked=false; $("retoMic").disabled=true; $("retoMicLbl").textContent="Pronunciación con micrófono (este navegador no lo permite)"; }
+  const showBest=()=>{ const b=store.get("retoBest",null); $("retoBest").textContent=b?`Tu mejor resultado: ${b}%`:"" };
+  showBest();
+  const mode=m=>{ $("qm-fast").setAttribute("aria-pressed",m==="fast"); $("qm-reto").setAttribute("aria-pressed",m==="reto"); $("quizFast").hidden=m!=="fast"; $("quizReto").hidden=m!=="reto"; };
+  $("qm-fast").onclick=()=>mode("fast"); $("qm-reto").onclick=()=>mode("reto");
+  $("retoStart").onclick=startReto;
+  reto={showBest};
+})();
+
+async function startReto(){
+  $("retoBest").textContent="Preparando preguntas…";
+  const [fr,pal]=await Promise.all([loadLocal("frases"),loadLocal("palabras")]);
+  if(!fr||!pal){ $("retoBest").textContent="Las frases todavía no están descargadas. Intenta en un rato."; return }
+  const tsel=$("retoTopic").value; const topics=tsel==="*"?Object.keys(fr):[tsel];
+  let S=[],W=[];
+  topics.forEach(t=>{ S=S.concat((fr[t]||[]).filter(x=>x.text&&x.es)); W=W.concat((pal[t]||[]).filter(x=>x.word)) });
+  if(S.length<8||W.length<8){ $("retoBest").textContent="No hay suficientes frases para ese tema. Prueba con todos los temas."; return }
+  const n=+$("retoLen").value;
+  const types=["listen_choose","listen_meaning","translate","blank","definition","order","spell"];
+  if($("retoMic").checked&&SR) types.push("speak","speak");
+  let plan=[]; while(plan.length<n) plan=plan.concat(shuffle(types.slice()));
+  const used=new Set(), usedW=new Set();
+  const qs=[];
+  for(const t of plan){ if(qs.length>=n) break; const q=makeQ(t,S,W,used,usedW)||makeQ("listen_choose",S,W,used,usedW); if(q) qs.push(q) }
+  Object.assign(reto,{qs,i:0,results:[],S,W});
+  $("retoSetup").hidden=true; $("retoBarWrap").hidden=false; $("retoQ").hidden=false;
+  renderRetoQ();
+}
+
+function sentence(S,used,min=4,max=13){
+  const pool=S.filter(s=>!used.has(s.id)&&wc(s.text)>=min&&wc(s.text)<=max);
+  const s=pick(pool.length?pool:S); used.add(s.id); return s;
+}
+function others(S,s,key,k=3){
+  const near=shuffle(S.filter(x=>x.id!==s.id&&x[key]&&x[key]!==s[key]&&Math.abs(wc(x.text)-wc(s.text))<=3));
+  const rest=shuffle(S.filter(x=>x.id!==s.id&&x[key]&&x[key]!==s[key]));
+  const out=[]; for(const x of near.concat(rest)){ if(out.length>=k) break; if(!out.includes(x[key])) out.push(x[key]) }
+  return out;
+}
+function wordOpts(W,w,k=3){
+  const same=shuffle(W.filter(x=>x.word!==w.word&&x.pos===w.pos)).map(x=>x.word);
+  const any=shuffle(W.filter(x=>x.word!==w.word)).map(x=>x.word);
+  return [...new Set(same.concat(any))].slice(0,k);
+}
+function makeQ(type,S,W,used,usedW){
+  const base={type,skill:QTYPES[type].skill,title:QTYPES[type].title};
+  if(type==="listen_choose"){ const s=sentence(S,used); const opts=shuffle([s.text,...others(S,s,"text")]); return {...base,s,opts,answer:opts.indexOf(s.text)} }
+  if(type==="listen_meaning"){ const s=sentence(S,used); const opts=shuffle([s.es,...others(S,s,"es")]); return {...base,s,opts,answer:opts.indexOf(s.es)} }
+  if(type==="translate"){ const s=sentence(S,used); const opts=shuffle([s.text,...others(S,s,"text")]); return {...base,s,prompt:s.es,opts,answer:opts.indexOf(s.text)} }
+  if(type==="order"){ const s=sentence(S,used,4,9); const tokens=s.text.replace(/[.,!?;:"“”]/g,"").split(/\s+/).filter(Boolean).map((t,i)=>i===0&&!/^I('|$)/.test(t)?t.charAt(0).toLowerCase()+t.slice(1):t); let mixed=shuffle(tokens.slice()); for(let k=0;k<5&&mixed.join(" ")===tokens.join(" ");k++) mixed=shuffle(tokens.slice()); return {...base,s,tokens:mixed} }
+  if(type==="speak"){ const s=sentence(S,used,3,9); return {...base,s} }
+  const pool=W.filter(w=>!usedW.has(w.word));
+  if(type==="blank"){
+    const c=shuffle(pool.filter(w=>w.example&&new RegExp("\\b"+w.word+"\\b","i").test(w.example)))[0]; if(!c) return null; usedW.add(c.word);
+    const opts=shuffle([c.word,...wordOpts(W,c)]);
+    return {...base,w:c,prompt:c.example.replace(new RegExp("\\b"+c.word+"\\b","i"),"_____"),opts,answer:opts.indexOf(c.word)};
+  }
+  if(type==="definition"){
+    const c=shuffle(pool.filter(w=>w.def&&w.def.length<160))[0]; if(!c) return null; usedW.add(c.word);
+    const opts=shuffle([c.word,...wordOpts(W,c)]);
+    return {...base,w:c,prompt:c.def,opts,answer:opts.indexOf(c.word)};
+  }
+  if(type==="spell"){ const c=shuffle(pool.filter(w=>w.audio))[0]; if(!c) return null; usedW.add(c.word); return {...base,w:c} }
+  return null;
+}
+
+function renderRetoQ(){
+  const q=reto.qs[reto.i], box=$("retoQ");
+  $("retoBar").style.width=(reto.i/reto.qs.length*100)+"%";
+  const head=`<div class="row" style="justify-content:space-between"><span class="label">Pregunta ${reto.i+1} de ${reto.qs.length}</span><span class="pill">${SKILLS[q.skill]}</span></div><p class="es" style="margin:0">${q.title}</p>`;
+  const playRow=(slow=true)=>`<div class="row" style="justify-content:center;gap:14px"><button class="big-play" data-a="play" aria-label="Escuchar">▶</button>${slow?'<button class="btn" data-a="slow">Más lenta</button>':""}</div>`;
+  let body="";
+  if(q.type==="listen_choose"||q.type==="listen_meaning") body=playRow()+`<div class="choices one" data-a="ch"></div>`;
+  else if(q.type==="translate"||q.type==="blank"||q.type==="definition") body=`<p class="prompt">${esc(q.prompt)}</p><div class="choices ${q.type==="translate"?"one":""}" data-a="ch"></div>`;
+  else if(q.type==="spell") body=playRow()+`<input type="text" id="spellIn" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Escribe la palabra en inglés"><div class="row"><button class="btn primary" data-a="check">Comprobar</button></div>`;
+  else if(q.type==="order") body=`<p class="ex" style="margin:0">Pista: ${esc(q.s.es)}</p><div class="answer-line" data-a="ans"></div><div class="tokens" data-a="tok"></div><div class="row"><button class="btn primary" data-a="check" disabled>Comprobar</button><button class="btn" data-a="clear">Borrar</button></div>`;
+  else if(q.type==="speak") body=`<p class="prompt">${esc(q.s.text)}</p><p class="ex" style="margin:0">${esc(q.s.es)}</p><div class="row"><button class="btn" data-a="play2">▶ Escuchar primero</button><button class="btn primary" data-a="mic">🎙 Decirla</button></div><div data-a="micout"></div><div class="row"><button class="btn" data-a="skip">Saltar</button></div>`;
+  box.innerHTML=head+body+`<div data-a="fb"></div><div class="row" data-a="nav" hidden><button class="btn primary" data-a="next">${reto.i+1<reto.qs.length?"Siguiente":"Ver resultados"}</button></div>`;
+  const el=k=>box.querySelector(`[data-a="${k}"]`);
+  const finish=(ok,extra="",partial)=>{
+    if(reto.qs[reto.i].done) return; reto.qs[reto.i].done=true;
+    reto.results.push({q,ok,partial});
+    el("fb").innerHTML=`<div class="feedback ${ok?"good":"badc"}">${ok?pick(["¡Correcto!","¡Eso es!","¡Muy bien!"]):"No era esa."}</div>${extra}`;
+    el("nav").hidden=false; el("next").focus();
+  };
+  el("next").onclick=()=>{ reto.i++; if(reto.i<reto.qs.length){ renderRetoQ() } else retoResults() };
+  const audioOf=()=>q.s?playSentence(q.s,1):playUrl(q.w.audio,1);
+  if(el("play")){ el("play").onclick=()=>audioOf().catch(()=>{}); if(el("slow")) el("slow").onclick=()=>(q.s?playSentence(q.s,.7):playUrl(q.w.audio,.7)).catch(()=>{}); setTimeout(()=>audioOf().catch(()=>{}),60) }
+  const sentenceInfo=s=>`<p class="ex" style="margin:6px 0 0">${esc(s.text)}<br><span style="font-style:normal">${esc(s.es)}</span></p>`;
+  if(el("ch")){
+    const ch=el("ch");
+    q.opts.forEach((o,i)=>{ const b=document.createElement("button"); b.className="choice"; b.textContent=o;
+      b.onclick=()=>{ if(q.done) return; const ok=i===q.answer; ch.children[q.answer].classList.add("right"); if(!ok) b.classList.add("wrong");
+        let extra="";
+        if(q.s) extra=sentenceInfo(q.s)+(q.type==="translate"?'<div class="row"><button class="btn" data-a="hear">▶ Escuchar a un nativo</button></div>':"");
+        if(q.w) extra=`<p class="ex" style="margin:6px 0 0"><b>${esc(q.w.word)}</b> ${esc(q.w.ipa||"")} · ${esc(q.w.def||"")}${q.w.example?`<br>“${esc(q.w.example)}”`:""}${q.w.es_example?`<br><span style="font-style:normal">${esc(q.w.es_example)}</span>`:""}</p>${q.w.audio?'<div class="row"><button class="btn" data-a="hear">🎧 Voz real</button></div>':""}`;
+        finish(ok,extra);
+        const h=el("hear"); if(h) h.onclick=()=>(q.s?playSentence(q.s,1):playUrl(q.w.audio,1)).catch(()=>{});
+      };
+      ch.appendChild(b) });
+  }
+  if(q.type==="spell"){
+    const inp=box.querySelector("#spellIn"); inp.addEventListener("keydown",e=>{ if(e.key==="Enter") el("check").click() });
+    el("check").onclick=()=>{ if(!inp.value.trim()){ inp.focus(); return } const ok=inp.value.trim().toLowerCase()===q.w.word; inp.disabled=true; el("check").disabled=true;
+      finish(ok,`<p class="ex" style="margin:6px 0 0">Era <b>${esc(q.w.word)}</b> ${esc(q.w.ipa||"")} · ${esc(q.w.def||"")}</p>`) };
+  }
+  if(q.type==="order"){
+    const ans=el("ans"), tok=el("tok"); const picked=[];
+    const draw=()=>{
+      ans.innerHTML=""; tok.innerHTML="";
+      picked.forEach((ti,k)=>{ const b=document.createElement("button"); b.className="token on"; b.textContent=q.tokens[ti]; b.onclick=()=>{ if(q.done) return; picked.splice(k,1); draw() }; ans.appendChild(b) });
+      q.tokens.forEach((t,ti)=>{ if(picked.includes(ti)) return; const b=document.createElement("button"); b.className="token"; b.textContent=t; b.onclick=()=>{ if(q.done) return; picked.push(ti); draw() }; tok.appendChild(b) });
+      if(!picked.length) ans.innerHTML='<span class="mic-out">Toca las palabras en orden…</span>';
+      el("check").disabled=picked.length!==q.tokens.length||q.done;
+    };
+    draw();
+    el("clear").onclick=()=>{ if(q.done) return; picked.length=0; draw() };
+    el("check").onclick=()=>{ const built=picked.map(i=>q.tokens[i]).join(" "); const ok=normW(built).join(" ")===normW(q.s.text).join(" ");
+      el("clear").disabled=true; el("check").disabled=true;
+      finish(ok,sentenceInfo(q.s)+'<div class="row"><button class="btn" data-a="hear">▶ Escuchar a un nativo</button></div>');
+      el("hear").onclick=()=>playSentence(q.s,1).catch(()=>{}) };
+  }
+  if(q.type==="speak"){
+    el("play2").onclick=()=>playSentence(q.s,1).catch(()=>{});
+    let tries=0,best=0;
+    micButton(el("mic"),()=>q.s.text,el("micout"),{
+      onResult:r=>{ tries++; best=Math.max(best,r.score);
+        if(best>=0.7) finish(true,"",best);
+        else if(tries>=3) finish(false,'<p class="ex" style="margin:6px 0 0">Sigue practicándola en “Frases de nativos”.</p>',best);
+        else el("micout").insertAdjacentHTML("beforeend",`<p class="mic-out" style="margin:4px 0 0">Te quedan ${3-tries} intento${3-tries===1?"":"s"}.</p>`);
+      }
+    });
+    el("skip").onclick=()=>{ if(q.done) return; q.done=true; reto.results.push({q,ok:null}); reto.i++; reto.i<reto.qs.length?renderRetoQ():retoResults() };
+  }
+}
+
+function retoResults(){
+  $("retoBar").style.width="100%";
+  const graded=reto.results.filter(r=>r.ok!==null), right=graded.filter(r=>r.ok).length;
+  const pct=graded.length?Math.round(right/graded.length*100):0;
+  const prev=store.get("retoBest",0); if(pct>prev) store.set("retoBest",pct);
+  const by={}; graded.forEach(r=>{ const k=r.q.skill; by[k]=by[k]||{ok:0,n:0}; by[k].n++; if(r.ok) by[k].ok++ });
+  const bars=Object.keys(SKILLS).filter(k=>by[k]).map(k=>{ const p=Math.round(by[k].ok/by[k].n*100);
+    return `<div class="skill"><div class="row" style="justify-content:space-between"><span>${SKILLS[k]}</span><span class="num">${by[k].ok}/${by[k].n}</span></div><div class="progress"><span style="width:${p}%;background:${p>=70?"var(--good)":p>=40?"var(--pollen)":"var(--bad)"}"></span></div></div>` }).join("");
+  const weak=Object.keys(by).sort((a,b)=>by[a].ok/by[a].n-by[b].ok/by[b].n)[0];
+  const advice={listen:"Practica en “Frases de nativos”: escucha sin leer y escribe lo que entiendas.",vocab:"Repasa con “Palabras de internet” y guarda las nuevas en tus tarjetas.",grammar:"Lee las frases en voz alta: el orden en inglés se aprende de oído.",speak:"Escucha la frase en voz lenta y repítela varias veces antes de grabar."};
+  const misses=reto.results.filter(r=>r.ok===false).slice(0,8);
+  const missHtml=misses.map((r,k)=>{ const q=r.q; const t=q.s?`${esc(q.s.text)}<br><span class="ex">${esc(q.s.es)}</span>`:`<b>${esc(q.w.word)}</b> · ${esc(q.w.def||"")}`;
+    return `<div class="miss"><div style="min-width:0">${t}</div><button class="btn" data-m="${k}" aria-label="Escuchar">▶</button></div>` }).join("");
+  const msg=pct>=90?"¡Impresionante, Vila! 🌿":pct>=70?"¡Muy buen resultado!":pct>=50?"Vas por buen camino.":"Buen intento, cada reto suma.";
+  $("retoQ").innerHTML=`<span class="label">Resultado del reto</span>
+    <p class="big-score">${pct}%</p><p class="es" style="margin:0">${msg}</p>
+    <p class="mic-out" style="margin:0">${right} de ${graded.length} correctas${reto.results.length>graded.length?` · ${reto.results.length-graded.length} saltada(s)`:""}${pct>prev&&prev?" · ¡Nuevo récord!":""}</p>
+    <div class="skills">${bars}</div>
+    ${weak&&by[weak].ok<by[weak].n?`<div class="tip"><b>Para mejorar:</b> ${advice[weak]}</div>`:""}
+    ${misses.length?`<span class="label">Para repasar</span><div class="misses">${missHtml}</div>`:""}
+    <div class="row"><button class="btn primary" data-a="again">Otro reto</button><button class="btn" data-a="setup">Cambiar tema</button></div>`;
+  $("retoQ").querySelectorAll("[data-m]").forEach(b=>{ const q=misses[+b.dataset.m].q; b.onclick=()=>(q.s?playSentence(q.s,1):(q.w.audio?playUrl(q.w.audio,1):Promise.resolve(say(q.w.word)))).catch(()=>{}) });
+  $("retoQ").querySelector('[data-a="again"]').onclick=startReto;
+  $("retoQ").querySelector('[data-a="setup"]').onclick=()=>{ $("retoSetup").hidden=false; $("retoQ").hidden=true; $("retoBarWrap").hidden=true; reto.showBest() };
+  touchStreak();
+}
 
 // ---------- garden + note ----------
 (function(){
