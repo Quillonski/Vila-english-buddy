@@ -11,14 +11,16 @@ DATA.mkdir(exist_ok=True)
 UA = {"User-Agent": "ingles-para-vila/1.0 (proyecto personal de práctica de inglés)"}
 
 TOPIC_SEEDS = {
-    "Crimen y juicios": ["crime", "court", "police", "prison", "trial"],
-    "Abogados": ["lawyer", "law", "judge", "contract", "court"],
-    "Laboratorio y química": ["chemistry", "laboratory", "chemical", "science", "experiment"],
-    "Flores y jardín": ["flower", "garden", "plant", "bloom", "seed"],
-    "Libros de suspenso": ["book", "mystery", "secret", "story", "detective"],
-    "Terror": ["ghost", "fear", "dark", "scary", "nightmare"],
-    "Detectives": ["detective", "clue", "murder", "investigation", "suspect"],
-    "Viajes": ["travel", "airport", "hotel", "trip", "ticket"],
+    "Crimen y juicios": ["crime", "court", "police", "prison", "trial", "jury", "evidence", "theft"],
+    "Abogados": ["lawyer", "law", "judge", "contract", "court", "lawsuit", "client", "verdict"],
+    "Laboratorio y química": ["chemistry", "laboratory", "chemical", "science", "experiment", "acid", "molecule", "formula"],
+    "Flores y jardín": ["flower", "garden", "plant", "bloom", "seed", "soil", "leaf", "petal"],
+    "Libros de suspenso": ["book", "mystery", "secret", "story", "novel", "plot", "suspense", "author"],
+    "Terror": ["ghost", "fear", "dark", "scary", "nightmare", "monster", "blood", "haunted"],
+    "Detectives": ["detective", "clue", "murder", "investigation", "suspect", "witness", "alibi", "spy"],
+    "Viajes": ["travel", "airport", "hotel", "trip", "ticket", "luggage", "passport", "beach"],
+    "Emociones": ["emotion", "feeling", "happy", "sad", "angry", "afraid", "love", "proud"],
+    "Día a día": ["home", "kitchen", "shopping", "work", "family", "morning", "clothes", "money"],
 }
 
 
@@ -171,43 +173,121 @@ def ejemplo_de(word):
     return "", ""
 
 
+# ---------- traducción al español (Wiktionary, con respaldo de MyMemory) ----------
+trad_cache = {}
+mymemory_chars = [0]
+
+
+def traducir(word):
+    if word in trad_cache:
+        return trad_cache[word]
+    es = []
+    for page in (word, word + "/translations"):
+        q = urllib.parse.urlencode({"action": "parse", "page": page, "prop": "wikitext", "format": "json",
+                                    "formatversion": "2", "redirects": "1"})
+        d = get_json("https://en.wiktionary.org/w/api.php?" + q) or {}
+        time.sleep(0.15)
+        text = (d.get("parse") or {}).get("wikitext") or ""
+        if not text:
+            continue
+        # solo la sección en inglés
+        m = re.search(r"==English==(.*?)(\n==[^=]|\Z)", text, re.S)
+        text = m.group(1) if m else text
+        for t in re.findall(r"\{\{tt?\+?\|es\|([^|}]+)", text):
+            t = t.strip()
+            if t and t not in es:
+                es.append(t)
+            if len(es) >= 2:
+                break
+        if es or "translation subpage" not in text:
+            break
+    res = ", ".join(es)
+    if not res and mymemory_chars[0] < 4500:
+        mymemory_chars[0] += len(word)
+        d = get_json("https://api.mymemory.translated.net/get?" + urllib.parse.urlencode({"q": word, "langpair": "en|es"})) or {}
+        t = ((d.get("responseData") or {}).get("translatedText") or "").strip()
+        if t and t.lower() != word and not re.search(r"MYMEMORY|QUERY", t, re.I):
+            res = t
+        time.sleep(0.3)
+    trad_cache[word] = res
+    return res
+
+
+def buscar_ejemplo(word, pool):
+    rx = re.compile(r"\b" + re.escape(word) + r"\b", re.I)
+    hits = [x for x in pool if rx.search(x["text"])]
+    if hits:
+        h = random.choice(hits)
+        return h["text"], h["es"]
+    return ejemplo_de(word)
+
+
 # ---------- banco de palabras ----------
-def palabras_de(seeds, conocidas):
+def palabras_de(seeds, conocidas, pool_frases, tomadas):
     pool = {}
     for seed in seeds:
-        q = urllib.parse.urlencode({"ml": seed, "topics": ",".join(seeds), "md": "dpfr", "ipa": "1", "max": "120"})
+        q = urllib.parse.urlencode({"ml": seed, "topics": ",".join(seeds[:5]), "md": "dpfr", "ipa": "1", "max": "150"})
         for r in get_json("https://api.datamuse.com/words?" + q) or []:
             w, tags = r.get("word", ""), r.get("tags", [])
-            if not re.fullmatch(r"[a-z]{4,14}", w) or w in conocidas or w in seeds or "prop" in tags or w in pool:
+            if not re.fullmatch(r"[a-z]{3,14}", w) or w in conocidas or w in tomadas or "prop" in tags or w in pool:
                 continue
             f = next((float(t[2:]) for t in tags if t.startswith("f:")), 0.0)
-            if 0.8 <= f <= 150 and any(t in ("n", "v", "adj") for t in tags):
+            if 0.6 <= f <= 400 and any(t in ("n", "v", "adj", "adv") for t in tags):
                 info = info_de_datamuse(r)
                 if info["def"]:
+                    info["f"] = f
                     pool[w] = info
         time.sleep(0.3)
-    cands = list(pool.values())
-    random.shuffle(cands)
-    cands = cands[:60]
+    # las más útiles primero (más frecuentes), con algo de variedad
+    cands = sorted(pool.values(), key=lambda c: -c["f"] * random.uniform(0.6, 1.4))[:110]
     audios = voces_reales([c["word"] for c in cands])
+    out = []
     for c in cands:
+        c.pop("f", None)
         c["audio"] = audios.get(c["word"], "")
-        c["example"], c["es_example"] = ejemplo_de(c["word"])
-    cands.sort(key=lambda r: (0 if r["audio"] else 1, 0 if r["example"] else 1))
-    return cands[:50]
+        c["es"] = traducir(c["word"])
+        if not c["es"]:
+            continue
+        c["example"], c["es_example"] = buscar_ejemplo(c["word"], pool_frases)
+        out.append(c)
+        if len(out) >= 100:
+            break
+    for c in out:
+        tomadas.add(c["word"])
+    out.sort(key=lambda r: (0 if r["audio"] else 1, 0 if r["example"] else 1))
+    return out
 
 
 def main():
     html = (ROOT / "index.html").read_text(encoding="utf-8")
     vocab = sorted(set(re.findall(r'\["([a-z][a-z\']+)","/', html)))
-    print(f"Palabras de la app: {len(vocab)}")
+    print(f"Palabras de la app: {len(vocab)}", flush=True)
 
-    frases, palabras = {}, {}
+    # reutilizar traducciones de la semana anterior para ir más rápido
+    try:
+        for lst in json.loads((DATA / "palabras.json").read_text(encoding="utf-8")).values():
+            for c in lst:
+                if c.get("es"):
+                    trad_cache[c["word"]] = c["es"]
+    except Exception:
+        pass
+
+    print("Banco general…", flush=True)
+    banco = banco_general()
+    if len(banco) >= 200 or not (DATA / "banco.json").exists():
+        (DATA / "banco.json").write_text(json.dumps(banco, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    print("  banco:", len(banco), "frases", flush=True)
+
+    frases = {}
     for topic, seeds in TOPIC_SEEDS.items():
-        print("Tema:", topic, flush=True)
-        frases[topic] = frases_de(seeds)
-        palabras[topic] = palabras_de(seeds, set(vocab))
-        print(f"  {len(frases[topic])} frases, {len(palabras[topic])} palabras")
+        frases[topic] = frases_de(seeds[:6])
+        print(f"Frases {topic}: {len(frases[topic])}", flush=True)
+    pool_frases = banco + [x for l in frases.values() for x in l]
+
+    palabras, tomadas = {}, set()
+    for topic, seeds in TOPIC_SEEDS.items():
+        palabras[topic] = palabras_de(seeds, set(vocab), pool_frases, tomadas)
+        print(f"Palabras {topic}: {len(palabras[topic])} (con voz real: {sum(1 for c in palabras[topic] if c['audio'])})", flush=True)
 
     pron = {w: {"audio": u} for w, u in voces_reales(vocab).items()}
     for lst in palabras.values():
@@ -224,14 +304,9 @@ def main():
         p.write_text(json.dumps(nuevo, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
 
     guardar("frases.json", frases, 40)
-    guardar("palabras.json", palabras, 40)
+    guardar("palabras.json", palabras, 80)
     guardar("pronunciacion.json", pron, 10)
-    print("Banco general…", flush=True)
-    banco = banco_general()
-    if len(banco) >= 200 or not (DATA / "banco.json").exists():
-        (DATA / "banco.json").write_text(json.dumps(banco, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    print("  banco:", len(banco), "frases", flush=True)
-    print("Listo:", sum(map(len, frases.values())), "frases,", sum(map(len, palabras.values())), "palabras,", len(pron), "pronunciaciones")
+    print("Listo:", sum(map(len, frases.values())), "frases,", sum(map(len, palabras.values())), "palabras,", len(pron), "pronunciaciones", flush=True)
 
 
 if __name__ == "__main__":

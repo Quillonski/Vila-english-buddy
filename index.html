@@ -155,7 +155,9 @@ footer{color:var(--muted);font-size:13px;text-align:center}
       <span class="ipa" id="cIpa"></span>
       <div id="cBack" hidden>
         <p class="es" id="cEs"></p>
+        <p class="ex" id="cDef" style="font-style:normal" hidden></p>
         <p class="ex" id="cEx"></p>
+        <p class="ex" id="cExEs" style="font-style:normal" hidden></p>
       </div>
       <div class="tip" id="cTip" hidden></div>
       <div class="row">
@@ -470,15 +472,44 @@ tabs.forEach(t=>document.getElementById("tab-"+t).addEventListener("click",()=>{
 // ---------- cards ----------
 const MY="Mis palabras";
 let myWords=store.get("mine",[]);
+// palabras escritas a mano (sirven para no repetir en "Palabras de internet")
+const BASE_WORDS=new Set(Object.values(VOCAB).flat().map(x=>x[0]));
 if(myWords.length) VOCAB[MY]=myWords;
 const catSel=document.getElementById("cat");
-function fillCats(){const cur=catSel.value;catSel.innerHTML="";Object.keys(VOCAB).forEach(c=>catSel.add(new Option(c===MY?"⭐ "+MY+" ("+VOCAB[MY].length+")":c,c)));if(cur&&VOCAB[cur])catSel.value=cur}
+function fillCats(){const cur=catSel.value;catSel.innerHTML="";Object.keys(VOCAB).forEach(c=>catSel.add(new Option(c===MY?"⭐ "+MY+" ("+VOCAB[MY].length+")":c+" ("+VOCAB[c].length+")",c)));if(cur&&VOCAB[cur])catSel.value=cur}
 fillCats();
 let deck=[],idx=0;
-function loadDeck(){ deck=VOCAB[catSel.value].slice(); idx=0; showCard(); }
+// mezcla al azar; primero las que todavía no domina
+function loadDeck(){
+  const all=(VOCAB[catSel.value]||[]).slice();
+  const fresh=shuffleArr(all.filter(c=>!known.has(c[0]))), done=shuffleArr(all.filter(c=>known.has(c[0])));
+  deck=fresh.concat(done); idx=0; showCard();
+}
+function shuffleArr(a){for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a}
+// temas de tarjetas que se amplían con las palabras descargadas de internet
+const CARD_SOURCES={"Crimen y juicios":["Crimen y juicios","Abogados"],"Flores y jardín":["Flores y jardín"],"Libros y suspenso":["Libros de suspenso","Detectives"],"Terror":["Terror"],"Emociones":["Emociones"],"Día a día":["Día a día"],"Laboratorio y química":["Laboratorio y química"],"Viajes":["Viajes"]};
+async function extendDecks(){
+  let pal=null; try{ const r=await fetch("data/palabras.json",{cache:"no-cache"}); if(r.ok) pal=await r.json() }catch(e){}
+  if(!pal) return;
+  for(const [cat,srcs] of Object.entries(CARD_SOURCES)){
+    const have=new Set((VOCAB[cat]||[]).map(c=>c[0]));
+    const extra=[];
+    srcs.forEach(t=>(pal[t]||[]).forEach(w=>{
+      if(!w.word||!w.es||have.has(w.word)) return; have.add(w.word);
+      extra.push([w.word,w.ipa||"",w.es,w.example||"",w.es_example||"",w.def||""]);
+    }));
+    if(extra.length) VOCAB[cat]=(VOCAB[cat]||[]).concat(extra);
+  }
+  if(VOCAB[MY]){ const m=VOCAB[MY]; delete VOCAB[MY]; VOCAB[MY]=m } // "Mis palabras" al final
+  const cur=catSel.value; fillCats(); catSel.value=cur;
+  if(idx===0&&$("cBack").hidden) loadDeck(); // si todavía no empezó, rehace el mazo ya ampliado
+}
 function showCard(){
-  const [w,ipa,es,ex]=deck[idx];
-  cWord.textContent=w; cIpa.textContent=ipa; cEs.textContent=es; cEx.textContent=ex;
+  if(!deck.length) return;
+  const [w,ipa,es,ex,exEs,def]=deck[idx];
+  cWord.textContent=w; cIpa.textContent=ipa; cEs.textContent=es; cEx.textContent=ex||"";
+  $("cDef").textContent=def||""; $("cDef").hidden=!def;
+  $("cExEs").textContent=exEs||""; $("cExEs").hidden=!exEs;
   cBack.hidden=true; rate.hidden=true; exPlay.hidden=true; flip.hidden=false; micOut.textContent="";
   if(TIPS[w]){cTip.innerHTML="<b>Truco:</b> "+TIPS[w]; cTip.hidden=false}else cTip.hidden=true;
   $("natTag").hidden=true;
@@ -490,9 +521,9 @@ const [cWord,cIpa,cEs,cEx,cBack,cTip,rate,exPlay,flip,micOut,cardCount,cardBar]=
   ["cWord","cIpa","cEs","cEx","cBack","cTip","rate","exPlay","flip","micOut","cardCount","cardBar"].map($);
 catSel.addEventListener("change",loadDeck);
 $("cardPlay").addEventListener("click",()=>{playWord(deck[idx][0]);touchStreak()});
-exPlay.addEventListener("click",()=>say(deck[idx][3]));
-flip.addEventListener("click",()=>{cBack.hidden=false;rate.hidden=false;exPlay.hidden=false;flip.hidden=true});
-function nextCard(){ idx=(idx+1)%deck.length; if(idx===0){cardBar.style.width="100%"} showCard(); }
+exPlay.addEventListener("click",()=>{ if(deck[idx][3]) say(deck[idx][3]) });
+flip.addEventListener("click",()=>{cBack.hidden=false;rate.hidden=false;exPlay.hidden=!deck[idx][3];flip.hidden=true});
+function nextCard(){ idx++; if(idx>=deck.length){ loadDeck(); return } showCard(); }
 $("gotIt").addEventListener("click",()=>{known.add(deck[idx][0]);store.set("known",[...known]);renderStats();touchStreak();nextCard()});
 $("again").addEventListener("click",()=>{deck.push(deck[idx]);touchStreak();nextCard()});
 
@@ -609,14 +640,14 @@ function showQ(){
 
 
 // ---------- nuevo: generado por Claude ----------
-const TOPICS=["Crimen y juicios","Abogados","Laboratorio y química","Flores y jardín","Libros de suspenso","Terror","Detectives","Viajes"];
+const TOPICS=["Crimen y juicios","Abogados","Laboratorio y química","Flores y jardín","Libros de suspenso","Terror","Detectives","Viajes","Emociones","Día a día"];
 let topic=TOPICS[0];
 const topicsBox=$("topics");
 TOPICS.forEach(t=>{const b=document.createElement("button");b.className="topic";b.textContent=t;b.setAttribute("aria-pressed",t===topic);
   b.onclick=()=>{topic=t;$("topicFree").value="";[...topicsBox.children].forEach(x=>x.setAttribute("aria-pressed",x===b))};topicsBox.appendChild(b)});
 $("topicFree").addEventListener("input",e=>{if(e.target.value.trim())[...topicsBox.children].forEach(x=>x.setAttribute("aria-pressed","false"))});
 const currentTopic=()=>$("topicFree").value.trim()||topic;
-const allKnownWords=()=>{const w=new Set();Object.values(VOCAB).forEach(l=>l.forEach(x=>w.add(x[0])));return [...w]};
+const allKnownWords=()=>{const w=new Set(BASE_WORDS);(VOCAB[MY]||[]).forEach(x=>w.add(x[0]));return [...w]};
 const esc=t=>String(t??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
 const DEF_TXT="gemini-3.6-flash", DEF_TTS="gemini-3.8-flash-lite-tts";
@@ -679,7 +710,9 @@ const TOPIC_SEEDS={
   "Libros de suspenso":["book","mystery","secret","story","detective"],
   "Terror":["ghost","fear","dark","scary","nightmare"],
   "Detectives":["detective","clue","murder","investigation","suspect"],
-  "Viajes":["travel","airport","hotel","trip","ticket"]
+  "Viajes":["travel","airport","hotel","trip","ticket"],
+  "Emociones":["emotion","feeling","happy","sad","angry"],
+  "Día a día":["home","kitchen","shopping","work","family"]
 };
 const shuffle=a=>{for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a};
 async function getJSON(url,signal){
@@ -1253,7 +1286,7 @@ function retoResults(){
   document.getElementById("note").textContent=notes[new Date().getDate()%notes.length];
 })();
 
-loadDeck(); newEar(); newQuiz(); renderStats();
+loadDeck(); newEar(); newQuiz(); renderStats(); extendDecks();
 </script>
 
 </body>
