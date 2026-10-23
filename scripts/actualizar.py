@@ -85,6 +85,33 @@ def en_paralelo(fn, items, hilos=8):
         return list(ex.map(fn, items))
 
 
+def lotes_con_reintento(fn, items, tam, hilos=3):
+    """Corre fn sobre lotes de `items`. Si un lote falla (None), espera y lo reintenta en mitades
+    más pequeñas, hasta lotes de 3. Devuelve la lista de resultados que sí funcionaron."""
+    pendientes = [items[i:i + tam] for i in range(0, len(items), tam)]
+    buenos = []
+    for ronda in range(4):
+        if not pendientes:
+            break
+        if ronda:
+            log(f"  reintentando {len(pendientes)} lote(s) que fallaron")
+            time.sleep(5 * ronda)
+        fallidos = []
+        for lote, r in zip(pendientes, en_paralelo(fn, pendientes, hilos=hilos)):
+            if r is None:
+                fallidos.append(lote)
+            else:
+                buenos.append(r)
+        pendientes = []
+        for lote in fallidos:
+            if len(lote) > 3:
+                mitad = len(lote) // 2
+                pendientes += [lote[:mitad], lote[mitad:]]
+            else:
+                pendientes.append(lote)
+    return buenos
+
+
 def flat(x):
     if isinstance(x, list):
         for y in x:
@@ -95,21 +122,25 @@ def flat(x):
 
 # ---------- memoria entre semanas ----------
 HOY = date.today().isoformat()
-cache = {"es": {}, "audio": {}}
+VERSION_TRAD = 2  # súbelo si cambia la forma de elegir traducciones, para buscarlas de nuevo
+cache = {"v": VERSION_TRAD, "es": {}, "audio": {}}
 
 
 def cargar_cache():
+    misma_version = False
     try:
         c = json.loads((DATA / "cache.json").read_text(encoding="utf-8"))
-        cache["es"].update(c.get("es", {}))
+        misma_version = c.get("v") == VERSION_TRAD
+        if misma_version:
+            cache["es"].update(c.get("es", {}))
         cache["audio"].update(c.get("audio", {}))
     except Exception:
         pass
-    # traducciones de la versión anterior de palabras.json
+    # voces (y, si el método no cambió, traducciones) de la versión anterior de palabras.json
     try:
         for lst in json.loads((DATA / "palabras.json").read_text(encoding="utf-8")).values():
             for c in lst:
-                if c.get("es") and c["word"] not in cache["es"]:
+                if misma_version and c.get("es") and c["word"] not in cache["es"]:
                     cache["es"][c["word"]] = [c["es"], HOY]
                 if c.get("audio") and c["word"] not in cache["audio"]:
                     cache["audio"][c["word"]] = [c["audio"], HOY]
@@ -134,6 +165,7 @@ def en_cache(tipo, word):
 
 
 def guardar_cache():
+    cache["v"] = VERSION_TRAD
     (DATA / "cache.json").write_text(json.dumps(cache, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
 
 
@@ -235,10 +267,7 @@ def voces_reales(words):
                 found[m.group(1).lower()] = url
         return ws, found
 
-    for res in en_paralelo(lote, [falta[i:i + 40] for i in range(0, len(falta), 40)], hilos=3):
-        if not res:
-            continue
-        ws, found = res
+    for ws, found in lotes_con_reintento(lote, falta, 40, hilos=3):
         for w in ws:
             cache["audio"][w] = [found.get(w, ""), HOY]
             if found.get(w):
@@ -246,17 +275,35 @@ def voces_reales(words):
     return out
 
 
-def es_de_wikitext(text):
+POS_TITULO = {"noun": "noun", "verb": "verb", "adjective": "adjective", "adverb": "adverb"}
+
+
+def _primera_es(texto):
+    m = re.search(r"\{\{tt?\+?\|es\|([^|}]+)", texto)
+    return m.group(1).strip() if m else ""
+
+
+def es_de_wikitext(text, pos=""):
+    """Primera traducción al español del sentido que corresponde al tipo de palabra.
+    Devuelve (traducción, hay_que_ver_subpágina)."""
     m = re.search(r"==English==(.*?)(\n==[^=]|\Z)", text, re.S)
-    text = m.group(1) if m else text
-    es = []
-    for t in re.findall(r"\{\{tt?\+?\|es\|([^|}]+)", text):
-        t = t.strip()
-        if t and t not in es:
-            es.append(t)
-        if len(es) >= 2:
-            break
-    return ", ".join(es), "translation subpage" in text
+    eng = m.group(1) if m else text
+    sub = "translation subpage" in eng
+    heads = [(h.start(), len(h.group(1)), h.group(2).strip().lower())
+             for h in re.finditer(r"^(={3,6})\s*([^=\n]+?)\s*\1\s*$", eng, re.M)]
+    objetivo = POS_TITULO.get(pos)
+    if objetivo:
+        for i, (ini, nivel, nombre) in enumerate(heads):
+            if nombre != objetivo:
+                continue
+            fin = next((s for s, n, _ in heads[i + 1:] if n <= nivel), len(eng))
+            seccion = eng[ini:fin]
+            t = _primera_es(seccion)
+            if t:
+                return t, False
+            if "translation subpage" in seccion:
+                return "", True
+    return _primera_es(eng), sub
 
 
 def wikitextos(titulos):
@@ -284,10 +331,12 @@ def wikitextos(titulos):
 mymemory_chars = [0]
 
 
-def traducir_todas(words):
-    """Traduce al español en lote: Wiktionary (50 por consulta), subpáginas, y MyMemory de respaldo."""
+def traducir_todas(cands):
+    """Traduce al español en lote: Wiktionary (20 por consulta, con reintentos), subpáginas, y MyMemory de respaldo.
+    `cands` son los dicts de palabras (se usa su tipo para elegir el sentido correcto)."""
+    pos_de = {c["word"]: c.get("pos", "") for c in cands}
     res, falta = {}, []
-    for w in dict.fromkeys(words):
+    for w in pos_de:
         v = en_cache("es", w)
         if v is None:
             falta.append(w)
@@ -295,26 +344,25 @@ def traducir_todas(words):
             res[w] = v
     if not falta:
         return res
-    lotes = [falta[i:i + 50] for i in range(0, len(falta), 50)]
     textos = {}
-    for r in en_paralelo(wikitextos, lotes, hilos=3):
-        if r:
-            textos.update(r)
+    for r in lotes_con_reintento(wikitextos, falta, 20, hilos=3):
+        textos.update(r)
     sub = []
     for w in falta:
         if w not in textos:
             continue  # error de red: se reintenta la próxima vez
-        es, tiene_sub = es_de_wikitext(textos[w])
+        es, ver_sub = es_de_wikitext(textos[w], pos_de[w])
         if es:
             res[w] = es
-        elif tiene_sub:
+        elif ver_sub:
             sub.append(w)
     if sub:
-        for r in en_paralelo(wikitextos, [[w + "/translations" for w in sub[i:i + 50]] for i in range(0, len(sub), 50)], hilos=3):
-            for t, txt in (r or {}).items():
-                es, _ = es_de_wikitext(txt)
+        for r in lotes_con_reintento(wikitextos, [w + "/translations" for w in sub], 20, hilos=3):
+            for t, txt in r.items():
+                w = t.split("/")[0]
+                es, _ = es_de_wikitext(txt, pos_de.get(w, ""))
                 if es:
-                    res[t.split("/")[0]] = es
+                    res[w] = es
     # respaldo: MyMemory, con un tope diario de caracteres
     for w in falta:
         if w in res or w not in textos or mymemory_chars[0] > 4500:
@@ -367,7 +415,7 @@ def palabras_de(seeds, conocidas, ejemplos, tomadas):
     # las más útiles primero (más frecuentes), con algo de variedad
     cands = sorted(pool.values(), key=lambda c: -c["f"] * random.uniform(0.6, 1.4))[:130]
     words = [c["word"] for c in cands]
-    trad = traducir_todas(words)
+    trad = traducir_todas(cands)
     audios = voces_reales(words)
     out = []
     for c in cands:
