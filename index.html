@@ -660,7 +660,7 @@ function errMsg(e){
     case "invalid_json": case "empty_completion": return "No salió bien esta vez. Toca el botón otra vez.";
     case "no_words": return "No encontré palabras nuevas para ese tema. Prueba otro tema o escríbelo en inglés.";
     case "no_sentences": return "No encontré frases grabadas sobre ese tema. Prueba otro tema o escríbelo en inglés.";
-    case "need_english": return "Para buscar en internet sin la clave de Gemini, escribe el tema en inglés (por ejemplo: garden, ghost).";
+    case "need_english": return "No entendí el tema. Prueba con otras palabras, por ejemplo: casa embrujada, hospital, cocina.";
     case "rate_limited_web": return "La fuente de internet pidió esperar un momento. Intenta de nuevo en un rato.";
     case "network": return "No pude conectar con la fuente de internet. Prueba con otro de los temas de la lista.";
     default: return "Hubo un problema de conexión. Intenta otra vez.";
@@ -689,38 +689,84 @@ async function getJSON(url,signal){
   if(!r.ok) throw {code:"network"};
   return r.json();
 }
+const STOP=new Set("the a an of and or to in on at for with by from as is are be was were my your his her our their its this that these those some any into about very more most than then there here what which who whom how when where why".split(" "));
+async function translateTopic(text,signal){
+  try{
+    const d=await getJSON("https://api.mymemory.translated.net/get?"+new URLSearchParams({q:text,langpair:"es|en"}),signal);
+    const t=(d&&d.responseData&&d.responseData.translatedText)||"";
+    return /MYMEMORY|QUERY LENGTH|INVALID/i.test(t)?"":t;
+  }catch(e){ if(e.code==="cancelled") throw e; return "" }
+}
+const seedCache={};
 async function getSeeds(signal){
   const free=$("topicFree").value.trim();
   if(!free) return TOPIC_SEEDS[topic];
+  if(seedCache[free]) return seedCache[free];
+  let words=[];
   if(cfg.key()){
     try{
       const r=await geminiJSON(`Give 5 simple, common English nouns that represent the topic "${free}", to search vocabulary and example sentences. Reply with only a JSON array of 5 lowercase single words.`,signal);
-      const w=(Array.isArray(r)?r:[]).map(x=>String(x).toLowerCase().replace(/[^a-z]/g,"")).filter(Boolean);
-      if(w.length) return w.slice(0,5);
+      words=(Array.isArray(r)?r:[]).map(x=>String(x).toLowerCase().replace(/[^a-z]/g,"")).filter(Boolean);
     }catch(e){ if(e.code==="cancelled") throw e }
   }
-  const w=free.toLowerCase().split(/[\s,]+/).map(x=>x.replace(/[^a-z]/g,"")).filter(x=>x.length>2);
-  if(!w.length) throw {code:"need_english"};
-  return w.slice(0,5);
+  if(!words.length){
+    const en=await translateTopic(free,signal);
+    const src=(en||free).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+    words=src.split(/[\s,;/]+/).map(x=>x.replace(/[^a-z]/g,"")).filter(x=>x.length>2&&!STOP.has(x));
+  }
+  if(!words.length) throw {code:"need_english"};
+  return (seedCache[free]=[...new Set(words)].slice(0,5));
 }
 
-// diccionario con grabaciones reales
+// voces reales de palabras (Wikimedia Commons permite consultas desde el navegador con origin=*)
 const natCache=store.get("natAudio",{});
-function pickAudio(entries){
-  const urls=[]; (entries||[]).forEach(e=>(e.phonetics||[]).forEach(p=>{ if(p.audio) urls.push(p.audio.startsWith("//")?"https:"+p.audio:p.audio) }));
-  return urls.find(u=>/-us\.mp3/i.test(u))||urls[0]||"";
+async function commonsAudio(words,signal){
+  const out={}, ws=[...new Set(words.filter(w=>/^[a-z]+$/.test(w)))];
+  for(let i=0;i<ws.length;i+=40){
+    const url="https://commons.wikimedia.org/w/api.php?"+new URLSearchParams({action:"query",titles:ws.slice(i,i+40).map(w=>"File:En-us-"+w+".ogg").join("|"),prop:"videoinfo",viprop:"url|derivatives",format:"json",formatversion:"2",origin:"*"});
+    try{
+      const d=await getJSON(url,signal);
+      ((d&&d.query&&d.query.pages)||[]).forEach(p=>{
+        if(p.missing||!p.videoinfo) return;
+        const m=/File:En-us-(.+)\.ogg$/i.exec(p.title||""); if(!m) return;
+        const vi=p.videoinfo[0]; const mp3=(vi.derivatives||[]).find(x=>/mpeg/.test(x.type||"")||x.transcodekey==="mp3");
+        let u=(mp3&&mp3.src)||vi.url||""; if(u.startsWith("//")) u="https:"+u;
+        if(u) out[m[1].toLowerCase()]=u;
+      });
+    }catch(e){ if(e.code==="cancelled") throw e }
+  }
+  return out;
 }
 async function lookup(word,signal){
-  const d=await getJSON("https://api.dictionaryapi.dev/api/v2/entries/en/"+encodeURIComponent(word),signal);
-  if(!Array.isArray(d)||!d.length){ natCache[word]=""; store.set("natAudio",natCache); return null }
-  const e=d[0]; const ipa=e.phonetic||((e.phonetics||[]).find(p=>p.text)||{}).text||"";
-  let def="",ex="",pos="";
-  for(const en of d) for(const m of (en.meanings||[])) for(const df of (m.definitions||[])){
-    if(!def&&df.definition){def=df.definition;pos=m.partOfSpeech||""}
-    if(!ex&&df.example&&df.example.split(" ").length>3) ex=df.example;
-  }
-  const audio=pickAudio(d); natCache[word]=audio; store.set("natAudio",natCache);
-  return {word,ipa,def,pos,example:ex,audio};
+  const a=await commonsAudio([word],signal);
+  natCache[word]=a[word]||"";
+  if(a[word]) store.set("natAudio",natCache);
+  return {word,audio:natCache[word]};
+}
+const POSMAP={n:"noun",v:"verb",adj:"adjective",adv:"adverb"};
+function dmInfo(r){
+  const tags=r.tags||[]; const ip=tags.find(t=>t.startsWith("ipa_pron:"));
+  let pos="",def=""; const d=(r.defs||[])[0];
+  if(d){ const i=d.indexOf("\t"); if(i>0){ pos=POSMAP[d.slice(0,i)]||d.slice(0,i); def=d.slice(i+1) } else def=d }
+  if(!pos){ const t=tags.find(t=>POSMAP[t]); pos=t?POSMAP[t]:"" }
+  return {word:r.word,ipa:ip?"/"+ip.slice(9)+"/":"",def:def.trim(),pos,example:"",es_example:"",audio:""};
+}
+// frases ya descargadas (por tema + banco general) para buscar ejemplos y temas libres
+let poolCache=null;
+async function sentencePool(){
+  if(poolCache) return poolCache;
+  const [fr,bn]=await Promise.all([loadLocal("frases"),loadLocal("banco")]);
+  const all=[], seen=new Set(), add=x=>{ if(x&&x.text&&x.es&&!seen.has(x.id)){ seen.add(x.id); all.push(x) } };
+  if(fr) Object.values(fr).forEach(l=>l.forEach(add));
+  if(Array.isArray(bn)) bn.forEach(add);
+  return (poolCache=all);
+}
+function findSentences(pool,words,limit,strong=[]){
+  const rx=w=>new RegExp("\\b"+w.replace(/[^a-z]/gi,"")+"(s|es|ed|d|ing)?\\b","i");
+  const R=words.map(rx), S=strong.map(rx);
+  const scored=[];
+  pool.forEach(s=>{ const n=R.filter(r=>r.test(s.text)).length+2*S.filter(r=>r.test(s.text)).length; if(n) scored.push([n+Math.random()*.9,s]) });
+  return scored.sort((a,b)=>b[0]-a[0]).slice(0,limit).map(x=>x[1]);
 }
 const localData={};
 async function loadLocal(name){
@@ -772,24 +818,28 @@ $("genWords").addEventListener("click",async()=>{
       }
     }
     const seeds=await getSeeds(sig);
-    const picks=shuffle(seeds.slice()).slice(0,3);
-    const results=await Promise.all(picks.map(s=>getJSON(`https://api.datamuse.com/words?ml=${encodeURIComponent(s)}&topics=${encodeURIComponent(seeds.join(","))}&md=pf&max=100`,sig).catch(e=>{ if(e.code==="cancelled") throw e; return [] })));
-    const pool=new Set();
+    setBusy(true,"Buscando palabras sobre “"+t+"” ("+seeds.join(", ")+")…");
+    const picks=seeds.slice(0,4);
+    const results=await Promise.all(picks.map(s=>getJSON(`https://api.datamuse.com/words?ml=${encodeURIComponent(s)}&topics=${encodeURIComponent(seeds.join(","))}&md=dpfr&ipa=1&max=100`,sig).catch(e=>{ if(e.code==="cancelled") throw e; return [] })));
+    const pool=new Map();
     results.flat().forEach(r=>{
       if(!r||!r.word) return; const w=r.word;
-      if(!/^[a-z]{4,14}$/.test(w)||known.has(w)||seeds.includes(w)) return;
+      if(!/^[a-z]{4,14}$/.test(w)||known.has(w)||pool.has(w)) return;
       const tags=r.tags||[]; const f=parseFloat((tags.find(x=>x.startsWith("f:"))||"f:0").slice(2));
-      if(f<0.8||f>150||tags.includes("prop")) return;
+      if(f<0.5||f>200||tags.includes("prop")) return;
       if(!tags.some(x=>["n","v","adj"].includes(x))) return;
-      pool.add(w);
+      const info=dmInfo(r); if(info.def) pool.set(w,info);
     });
-    const cands=shuffle([...pool]).slice(0,16);
+    // las palabras del propio tema también cuentan si son nuevas
+    let cands=shuffle([...pool.values()]).slice(0,24);
     if(!cands.length) throw {code:"no_words"};
-    setBusy(true,"Buscando pronunciación y ejemplos en el diccionario…");
-    const looked=(await Promise.all(cands.map(w=>lookup(w,sig).catch(e=>{ if(e.code==="cancelled") throw e; return null })))).filter(x=>x&&x.def);
-    looked.sort((a,b)=>(b.audio?1:0)-(a.audio?1:0));
-    const list=looked.slice(0,8);
-    if(!list.length) throw {code:"no_words"};
+    setBusy(true,"Buscando voces reales y ejemplos…");
+    const [audios,sp]=await Promise.all([commonsAudio(cands.map(c=>c.word),sig),sentencePool()]);
+    cands.forEach(c=>{ c.audio=audios[c.word]||""; if(c.audio){ natCache[c.word]=c.audio }
+      const s=findSentences(sp,[c.word],1)[0]; if(s){ c.example=s.text; c.es_example=s.es } });
+    store.set("natAudio",natCache);
+    cands.sort((a,b)=>((b.audio?2:0)+(b.example?1:0))-((a.audio?2:0)+(a.example?1:0)));
+    const list=cands.slice(0,8);
     await finishWords(list,sig);
   }catch(e){ setBusy(false,errMsg(e)) }
 });
@@ -841,14 +891,31 @@ $("genListen").addEventListener("click",async()=>{
       }
     }
     const seeds=await getSeeds(sig);
-    const q=seeds.map(s=>s.replace(/[^a-z]/gi,"")).filter(Boolean).join(" | ");
-    const url=`https://api.tatoeba.org/v1/sentences?lang=eng&q=${encodeURIComponent(q)}&has_audio=yes&word_count=4-13&trans:lang=spa&include=audios&sort=random&limit=12`;
-    const d=await getJSON(url,sig);
-    const list=((d&&d.data)||[]).map(s=>{
-      const a=(s.audios||[])[0]; if(!a) return null;
-      const tr=[s.translations||[]].flat(4).find(x=>x&&x.lang==="spa");
-      return {id:s.id,text:s.text,es:tr?tr.text:"",audio:a.download_url||`https://audio.tatoeba.org/sentences/eng/${s.id}.mp3`,author:a.author||"",license:a.license||a.licence||"",attr:a.attribution_url||""};
-    }).filter(Boolean);
+    let list=[];
+    // 1) intento en vivo con Tatoeba (si el navegador lo permite)
+    const live=new AbortController(); const stopLive=()=>live.abort(); sig.addEventListener("abort",stopLive); const timer=setTimeout(stopLive,7000);
+    try{
+      const q=seeds.map(s=>s.replace(/[^a-z]/gi,"")).filter(Boolean).join(" | ");
+      const d=await getJSON(`https://api.tatoeba.org/v1/sentences?lang=eng&q=${encodeURIComponent(q)}&has_audio=yes&word_count=4-13&trans:lang=spa&include=audios&sort=random&limit=12`,live.signal);
+      list=((d&&d.data)||[]).map(s=>{
+        const a=(s.audios||[])[0]; if(!a) return null;
+        const tr=[s.translations||[]].flat(4).find(x=>x&&x.lang==="spa");
+        return tr?{id:s.id,text:s.text,es:tr.text,audio:a.download_url||`https://audio.tatoeba.org/sentences/eng/${s.id}.mp3`,author:a.author||"",license:a.license||a.licence||"",attr:a.attribution_url||""}:null;
+      }).filter(Boolean);
+    }catch(e){ if(sig.aborted) throw {code:"cancelled"} }
+    finally{ clearTimeout(timer); sig.removeEventListener("abort",stopLive) }
+    // 2) si no, busca en las frases ya descargadas, con palabras relacionadas
+    if(list.length<4){
+      setBusy(true,"Buscando entre las frases grabadas que ya tiene la app…");
+      let related=[];
+      try{
+        const rel=await getJSON(`https://api.datamuse.com/words?ml=${encodeURIComponent(seeds.slice(0,3).join(" "))}&max=30`,sig);
+        related=(rel||[]).map(r=>r.word).filter(w=>/^[a-z]{3,}$/.test(w));
+      }catch(e){ if(e.code==="cancelled") throw e }
+      const found=findSentences(await sentencePool(),related,10,seeds);
+      const ids=new Set(list.map(x=>x.id)); found.forEach(x=>{ if(!ids.has(x.id)) list.push(x) });
+      list=list.slice(0,10);
+    }
     if(!list.length) throw {code:"no_sentences"};
     lis={list,i:0,ok:0}; renderListen();
     setBusy(false,"Escucha, escribe lo que entiendas y luego revisa. Puedes repetir el audio las veces que quieras.");

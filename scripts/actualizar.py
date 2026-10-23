@@ -78,6 +78,36 @@ def frases_de(seeds):
     return out[:120]
 
 
+def a_frase(s):
+    if not s.get("audios"):
+        return None
+    a = s["audios"][0]
+    es = next((t.get("text") for t in flat(s.get("translations", [])) if t.get("lang") == "spa"), "")
+    if not es:
+        return None
+    return {
+        "id": s["id"], "text": s.get("text", ""), "es": es,
+        "audio": a.get("download_url") or f"https://audio.tatoeba.org/sentences/eng/{s['id']}.mp3",
+        "author": a.get("author") or "", "license": a.get("license") or a.get("licence") or "",
+        "attr": a.get("attribution_url") or "",
+    }
+
+
+def banco_general(rondas=40):
+    """Frases variadas con audio y traducción, para buscar temas que Vila escriba a mano."""
+    out, seen = [], set()
+    for _ in range(rondas):
+        q = urllib.parse.urlencode({"lang": "eng", "has_audio": "yes", "word_count": "4-12", "trans:lang": "spa",
+                                    "include": "audios", "sort": "random", "limit": "100"})
+        for s in (get_json("https://api.tatoeba.org/v1/sentences?" + q) or {}).get("data", []):
+            f = a_frase(s)
+            if f and f["id"] not in seen:
+                seen.add(f["id"])
+                out.append(f)
+        time.sleep(0.5)
+    return out
+
+
 # ---------- palabras: datos, voz real y ejemplos ----------
 POS = {"n": "noun", "v": "verb", "adj": "adjective", "adv": "adverb"}
 
@@ -196,6 +226,11 @@ def main():
     guardar("frases.json", frases, 40)
     guardar("palabras.json", palabras, 40)
     guardar("pronunciacion.json", pron, 10)
+    print("Banco general…", flush=True)
+    banco = banco_general()
+    if len(banco) >= 200 or not (DATA / "banco.json").exists():
+        (DATA / "banco.json").write_text(json.dumps(banco, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    print("  banco:", len(banco), "frases", flush=True)
     print("Listo:", sum(map(len, frases.values())), "frases,", sum(map(len, palabras.values())), "palabras,", len(pron), "pronunciaciones")
 
 
