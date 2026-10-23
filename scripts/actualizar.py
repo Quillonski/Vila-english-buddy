@@ -1,14 +1,27 @@
-"""Descarga frases con audio (Tatoeba), palabras por tema (Datamuse) y
-pronunciaciones grabadas por personas (Wikimedia Commons) y las guarda en data/.
-La app las lee desde el mismo sitio, así el navegador no bloquea nada.
-Lo ejecuta GitHub Actions; no hace falta correrlo a mano."""
-import json, random, re, time, urllib.parse, urllib.request
+"""Descarga frases con audio (Tatoeba), palabras por tema (Datamuse), traducciones
+(Wiktionary) y pronunciaciones grabadas por personas (Wikimedia Commons), y las
+guarda en data/. La app las lee desde el mismo sitio, así el navegador no bloquea nada.
+Lo ejecuta GitHub Actions; no hace falta correrlo a mano.
+
+Versión optimizada:
+  1. Traducciones en lote (hasta 50 palabras por consulta a Wiktionary).
+  2. Consultas en paralelo, con un límite por servicio para no saturarlos.
+  3. Ejemplos buscados solo entre las frases ya descargadas (sin consultas extra).
+  4. Memoria (data/cache.json): traducciones y voces de semanas anteriores.
+  5. Presupuesto de tiempo: si se acerca el límite, guarda lo que lleva y termina bien.
+"""
+import json, random, re, threading, time, urllib.parse, urllib.request
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 DATA.mkdir(exist_ok=True)
 UA = {"User-Agent": "ingles-para-vila/1.0 (proyecto personal de práctica de inglés)"}
+INICIO = time.monotonic()
+PRESUPUESTO = 40 * 60          # segundos; el workflow corta a los 60 min
+REVISAR_NEGATIVOS = 30         # días antes de volver a buscar algo que no se encontró
 
 TOPIC_SEEDS = {
     "Crimen y juicios": ["crime", "court", "police", "prison", "trial", "jury", "evidence", "theft"],
@@ -23,25 +36,53 @@ TOPIC_SEEDS = {
     "Día a día": ["home", "kitchen", "shopping", "work", "family", "morning", "clothes", "money"],
 }
 
+# cuántas consultas a la vez se permiten por servicio (para ser respetuosos)
+LIMITES = {"tatoeba": 4, "datamuse": 6, "wiktionary": 3, "wikimedia": 3, "mymemory": 1}
+_sem = {k: threading.Semaphore(v) for k, v in LIMITES.items()}
+_print = threading.Lock()
 
-def get_json(url, tries=3):
+
+def log(*a):
+    with _print:
+        print(*a, flush=True)
+
+
+def queda_tiempo(margen=0):
+    return time.monotonic() - INICIO < PRESUPUESTO - margen
+
+
+def servicio(url):
+    for k in LIMITES:
+        if k in url:
+            return _sem[k]
+    return threading.Semaphore(4)
+
+
+def get_json(url, tries=3, timeout=30):
+    sem = servicio(url)
     for i in range(tries):
         try:
-            with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=30) as r:
-                return json.load(r)
+            with sem:
+                with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=timeout) as r:
+                    return json.load(r)
         except urllib.error.HTTPError as e:
             if e.code == 404:
                 return None
             if e.code == 429:
                 time.sleep(5 * (i + 1))
                 continue
-            print("  HTTP", e.code, url, flush=True)
+            log("  HTTP", e.code, url[:120])
             if e.code >= 500 and i >= 1:
                 return None
         except Exception as e:  # red inestable: reintentar
-            print("  error", e, url, flush=True)
+            log("  error", e, url[:120])
         time.sleep(2 * (i + 1))
     return None
+
+
+def en_paralelo(fn, items, hilos=8):
+    with ThreadPoolExecutor(max_workers=hilos) as ex:
+        return list(ex.map(fn, items))
 
 
 def flat(x):
@@ -52,34 +93,51 @@ def flat(x):
         yield x
 
 
+# ---------- memoria entre semanas ----------
+HOY = date.today().isoformat()
+cache = {"es": {}, "audio": {}}
+
+
+def cargar_cache():
+    try:
+        c = json.loads((DATA / "cache.json").read_text(encoding="utf-8"))
+        cache["es"].update(c.get("es", {}))
+        cache["audio"].update(c.get("audio", {}))
+    except Exception:
+        pass
+    # traducciones de la versión anterior de palabras.json
+    try:
+        for lst in json.loads((DATA / "palabras.json").read_text(encoding="utf-8")).values():
+            for c in lst:
+                if c.get("es") and c["word"] not in cache["es"]:
+                    cache["es"][c["word"]] = [c["es"], HOY]
+                if c.get("audio") and c["word"] not in cache["audio"]:
+                    cache["audio"][c["word"]] = [c["audio"], HOY]
+    except Exception:
+        pass
+
+
+def en_cache(tipo, word):
+    """Devuelve el valor guardado, o None si hay que buscarlo (o volver a buscarlo)."""
+    v = cache[tipo].get(word)
+    if not v:
+        return None
+    valor, fecha = v
+    if valor:
+        return valor
+    try:  # un "no encontrado" se vuelve a revisar cada cierto tiempo
+        if date.fromisoformat(fecha) > date.today() - timedelta(days=REVISAR_NEGATIVOS):
+            return ""
+    except ValueError:
+        pass
+    return None
+
+
+def guardar_cache():
+    (DATA / "cache.json").write_text(json.dumps(cache, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+
+
 # ---------- frases con audio ----------
-def frases_de(seeds):
-    out, seen = [], set()
-    for seed in seeds:
-        q = urllib.parse.urlencode({
-            "lang": "eng", "q": seed, "has_audio": "yes", "word_count": "4-13",
-            "trans:lang": "spa", "include": "audios", "sort": "random", "limit": "40",
-        })
-        d = get_json("https://api.tatoeba.org/v1/sentences?" + q) or {}
-        for s in d.get("data", []):
-            if s.get("id") in seen or not s.get("audios"):
-                continue
-            a = s["audios"][0]
-            es = next((t.get("text") for t in flat(s.get("translations", [])) if t.get("lang") == "spa"), "")
-            if not es:
-                continue
-            seen.add(s["id"])
-            out.append({
-                "id": s["id"], "text": s.get("text", ""), "es": es,
-                "audio": a.get("download_url") or f"https://audio.tatoeba.org/sentences/eng/{s['id']}.mp3",
-                "author": a.get("author") or "", "license": a.get("license") or a.get("licence") or "",
-                "attr": a.get("attribution_url") or "",
-            })
-        time.sleep(0.5)
-    random.shuffle(out)
-    return out[:120]
-
-
 def a_frase(s):
     if not s.get("audios"):
         return None
@@ -95,22 +153,35 @@ def a_frase(s):
     }
 
 
-def banco_general(rondas=40):
-    """Frases variadas con audio y traducción, para buscar temas que Vila escriba a mano."""
+def consulta_tatoeba(params):
+    q = urllib.parse.urlencode({"lang": "eng", "has_audio": "yes", "trans:lang": "spa", "include": "audios",
+                                "sort": "random", **params})
+    d = get_json("https://api.tatoeba.org/v1/sentences?" + q, timeout=45) or {}
+    return [f for f in (a_frase(s) for s in d.get("data", [])) if f]
+
+
+def sin_repetir(listas):
     out, seen = [], set()
-    for _ in range(rondas):
-        q = urllib.parse.urlencode({"lang": "eng", "has_audio": "yes", "word_count": "4-12", "trans:lang": "spa",
-                                    "include": "audios", "sort": "random", "limit": "100"})
-        for s in (get_json("https://api.tatoeba.org/v1/sentences?" + q) or {}).get("data", []):
-            f = a_frase(s)
-            if f and f["id"] not in seen:
+    for l in listas:
+        for f in l:
+            if f["id"] not in seen:
                 seen.add(f["id"])
                 out.append(f)
-        time.sleep(0.5)
     return out
 
 
-# ---------- palabras: datos, voz real y ejemplos ----------
+def banco_general(rondas=40):
+    """Frases variadas con audio y traducción, para buscar temas que Vila escriba a mano."""
+    return sin_repetir(en_paralelo(lambda _: consulta_tatoeba({"word_count": "4-12", "limit": "100"}), range(rondas)))
+
+
+def frases_de(seeds):
+    out = sin_repetir(en_paralelo(lambda s: consulta_tatoeba({"q": s, "word_count": "4-13", "limit": "40"}), seeds))
+    random.shuffle(out)
+    return out[:120]
+
+
+# ---------- palabras: datos, voz real, traducción y ejemplos ----------
 POS = {"n": "noun", "v": "verb", "adj": "adjective", "adv": "adverb"}
 
 
@@ -127,107 +198,163 @@ def info_de_datamuse(r):
             definition = parts[0]
     if not pos:
         pos = next((POS[t] for t in tags if t in POS), "")
-    return {"word": r.get("word", ""), "ipa": "/" + ipa + "/" if ipa else "", "def": definition, "pos": pos,
+    return {"word": r.get("word", ""), "ipa": "/" + ipa + "/" if ipa else "", "def": definition.strip(), "pos": pos,
             "example": "", "es_example": "", "audio": ""}
 
 
 def voces_reales(words):
-    """Grabaciones de Wikimedia Commons (archivos En-us-<palabra>.ogg), en mp3 cuando existe."""
+    """Grabaciones de Wikimedia Commons (archivos En-us-<palabra>.ogg), en mp3 cuando existe. En lote y con memoria."""
     out = {}
-    words = [w for w in words if re.fullmatch(r"[a-z]+", w)]
-    for i in range(0, len(words), 40):
-        lote = words[i:i + 40]
-        titles = "|".join("File:En-us-" + w + ".ogg" for w in lote)
+    falta = []
+    for w in dict.fromkeys(w for w in words if re.fullmatch(r"[a-z]+", w)):
+        v = en_cache("audio", w)
+        if v is None:
+            falta.append(w)
+        elif v:
+            out[w] = v
+
+    def lote(ws):
+        titles = "|".join("File:En-us-" + w + ".ogg" for w in ws)
         q = urllib.parse.urlencode({"action": "query", "titles": titles, "prop": "videoinfo",
                                     "viprop": "url|derivatives", "format": "json", "formatversion": "2"})
-        d = get_json("https://commons.wikimedia.org/w/api.php?" + q) or {}
+        d = get_json("https://commons.wikimedia.org/w/api.php?" + q)
+        if d is None:
+            return None  # error de red: no anotar como "no existe"
+        found = {}
         for page in d.get("query", {}).get("pages", []):
-            if page.get("missing") or not page.get("videoinfo"):
-                continue
             m = re.match(r"File:En-us-(.+)\.ogg$", page.get("title", ""), re.I)
-            if not m:
+            if not m or page.get("missing") or not page.get("videoinfo"):
                 continue
             vi = page["videoinfo"][0]
-            mp3 = next((x.get("src") for x in vi.get("derivatives", []) if "mpeg" in (x.get("type") or "") or x.get("transcodekey") == "mp3"), "")
+            mp3 = next((x.get("src") for x in vi.get("derivatives", [])
+                        if "mpeg" in (x.get("type") or "") or x.get("transcodekey") == "mp3"), "")
             url = mp3 or vi.get("url", "")
             if url.startswith("//"):
                 url = "https:" + url
             if url:
-                out[m.group(1).lower()] = url
-        time.sleep(0.5)
+                found[m.group(1).lower()] = url
+        return ws, found
+
+    for res in en_paralelo(lote, [falta[i:i + 40] for i in range(0, len(falta), 40)], hilos=3):
+        if not res:
+            continue
+        ws, found = res
+        for w in ws:
+            cache["audio"][w] = [found.get(w, ""), HOY]
+            if found.get(w):
+                out[w] = found[w]
     return out
 
 
-def ejemplo_de(word):
-    q = urllib.parse.urlencode({"lang": "eng", "q": word, "word_count": "4-12", "trans:lang": "spa",
-                                "sort": "random", "limit": "10"})
-    d = get_json("https://api.tatoeba.org/v1/sentences?" + q) or {}
-    time.sleep(0.3)
-    for s in d.get("data", []):
-        text = s.get("text", "")
-        if not re.search(r"\b" + re.escape(word) + r"\b", text, re.I):
-            continue
-        es = next((t.get("text") for t in flat(s.get("translations", [])) if t.get("lang") == "spa"), "")
-        if es:
-            return text, es
-    return "", ""
+def es_de_wikitext(text):
+    m = re.search(r"==English==(.*?)(\n==[^=]|\Z)", text, re.S)
+    text = m.group(1) if m else text
+    es = []
+    for t in re.findall(r"\{\{tt?\+?\|es\|([^|}]+)", text):
+        t = t.strip()
+        if t and t not in es:
+            es.append(t)
+        if len(es) >= 2:
+            break
+    return ", ".join(es), "translation subpage" in text
 
 
-# ---------- traducción al español (Wiktionary, con respaldo de MyMemory) ----------
-trad_cache = {}
+def wikitextos(titulos):
+    """Contenido de hasta 50 páginas de Wiktionary por consulta. Devuelve {título pedido: wikitext} o None si falló."""
+    q = urllib.parse.urlencode({"action": "query", "prop": "revisions", "rvprop": "content", "rvslots": "main",
+                                "titles": "|".join(titulos), "redirects": "1", "format": "json", "formatversion": "2"})
+    d = get_json("https://en.wiktionary.org/w/api.php?" + q)
+    if d is None:
+        return None
+    qd = d.get("query", {})
+    alias = {t: t for t in titulos}
+    for k in ("normalized", "redirects"):
+        for x in qd.get(k, []):
+            for orig, actual in list(alias.items()):
+                if actual == x.get("from"):
+                    alias[orig] = x.get("to")
+    por_titulo = {}
+    for p in qd.get("pages", []):
+        revs = p.get("revisions") or []
+        if revs:
+            por_titulo[p.get("title")] = ((revs[0].get("slots") or {}).get("main") or {}).get("content", "")
+    return {orig: por_titulo.get(actual, "") for orig, actual in alias.items()}
+
+
 mymemory_chars = [0]
 
 
-def traducir(word):
-    if word in trad_cache:
-        return trad_cache[word]
-    es = []
-    for page in (word, word + "/translations"):
-        q = urllib.parse.urlencode({"action": "parse", "page": page, "prop": "wikitext", "format": "json",
-                                    "formatversion": "2", "redirects": "1"})
-        d = get_json("https://en.wiktionary.org/w/api.php?" + q) or {}
-        time.sleep(0.15)
-        text = (d.get("parse") or {}).get("wikitext") or ""
-        if not text:
+def traducir_todas(words):
+    """Traduce al español en lote: Wiktionary (50 por consulta), subpáginas, y MyMemory de respaldo."""
+    res, falta = {}, []
+    for w in dict.fromkeys(words):
+        v = en_cache("es", w)
+        if v is None:
+            falta.append(w)
+        elif v:
+            res[w] = v
+    if not falta:
+        return res
+    lotes = [falta[i:i + 50] for i in range(0, len(falta), 50)]
+    textos = {}
+    for r in en_paralelo(wikitextos, lotes, hilos=3):
+        if r:
+            textos.update(r)
+    sub = []
+    for w in falta:
+        if w not in textos:
+            continue  # error de red: se reintenta la próxima vez
+        es, tiene_sub = es_de_wikitext(textos[w])
+        if es:
+            res[w] = es
+        elif tiene_sub:
+            sub.append(w)
+    if sub:
+        for r in en_paralelo(wikitextos, [[w + "/translations" for w in sub[i:i + 50]] for i in range(0, len(sub), 50)], hilos=3):
+            for t, txt in (r or {}).items():
+                es, _ = es_de_wikitext(txt)
+                if es:
+                    res[t.split("/")[0]] = es
+    # respaldo: MyMemory, con un tope diario de caracteres
+    for w in falta:
+        if w in res or w not in textos or mymemory_chars[0] > 4500:
             continue
-        # solo la sección en inglés
-        m = re.search(r"==English==(.*?)(\n==[^=]|\Z)", text, re.S)
-        text = m.group(1) if m else text
-        for t in re.findall(r"\{\{tt?\+?\|es\|([^|}]+)", text):
-            t = t.strip()
-            if t and t not in es:
-                es.append(t)
-            if len(es) >= 2:
-                break
-        if es or "translation subpage" not in text:
-            break
-    res = ", ".join(es)
-    if not res and mymemory_chars[0] < 4500:
-        mymemory_chars[0] += len(word)
-        d = get_json("https://api.mymemory.translated.net/get?" + urllib.parse.urlencode({"q": word, "langpair": "en|es"})) or {}
+        mymemory_chars[0] += len(w)
+        d = get_json("https://api.mymemory.translated.net/get?" + urllib.parse.urlencode({"q": w, "langpair": "en|es"})) or {}
         t = ((d.get("responseData") or {}).get("translatedText") or "").strip()
-        if t and t.lower() != word and not re.search(r"MYMEMORY|QUERY", t, re.I):
-            res = t
-        time.sleep(0.3)
-    trad_cache[word] = res
+        if t and t.lower() != w and not re.search(r"MYMEMORY|QUERY", t, re.I):
+            res[w] = t
+    for w in falta:
+        if w in textos:
+            cache["es"][w] = [res.get(w, ""), HOY]
     return res
 
 
-def buscar_ejemplo(word, pool):
-    rx = re.compile(r"\b" + re.escape(word) + r"\b", re.I)
-    hits = [x for x in pool if rx.search(x["text"])]
-    if hits:
-        h = random.choice(hits)
-        return h["text"], h["es"]
-    return ejemplo_de(word)
+class Ejemplos:
+    """Busca ejemplos entre las frases ya descargadas (índice por palabra, sin consultas a internet)."""
+
+    def __init__(self, frases):
+        self.idx = {}
+        for f in frases:
+            for w in set(re.findall(r"[a-z]+", f["text"].lower())):
+                self.idx.setdefault(w, []).append(f)
+
+    def de(self, word):
+        hits = self.idx.get(word.lower())
+        if hits:
+            h = random.choice(hits)
+            return h["text"], h["es"]
+        return "", ""
 
 
-# ---------- banco de palabras ----------
-def palabras_de(seeds, conocidas, pool_frases, tomadas):
-    pool = {}
-    for seed in seeds:
+def palabras_de(seeds, conocidas, ejemplos, tomadas):
+    def buscar(seed):
         q = urllib.parse.urlencode({"ml": seed, "topics": ",".join(seeds[:5]), "md": "dpfr", "ipa": "1", "max": "150"})
-        for r in get_json("https://api.datamuse.com/words?" + q) or []:
+        return get_json("https://api.datamuse.com/words?" + q) or []
+
+    pool = {}
+    for lista in en_paralelo(buscar, seeds, hilos=6):
+        for r in lista:
             w, tags = r.get("word", ""), r.get("tags", [])
             if not re.fullmatch(r"[a-z]{3,14}", w) or w in conocidas or w in tomadas or "prop" in tags or w in pool:
                 continue
@@ -237,18 +364,19 @@ def palabras_de(seeds, conocidas, pool_frases, tomadas):
                 if info["def"]:
                     info["f"] = f
                     pool[w] = info
-        time.sleep(0.3)
     # las más útiles primero (más frecuentes), con algo de variedad
-    cands = sorted(pool.values(), key=lambda c: -c["f"] * random.uniform(0.6, 1.4))[:110]
-    audios = voces_reales([c["word"] for c in cands])
+    cands = sorted(pool.values(), key=lambda c: -c["f"] * random.uniform(0.6, 1.4))[:130]
+    words = [c["word"] for c in cands]
+    trad = traducir_todas(words)
+    audios = voces_reales(words)
     out = []
     for c in cands:
         c.pop("f", None)
-        c["audio"] = audios.get(c["word"], "")
-        c["es"] = traducir(c["word"])
+        c["es"] = trad.get(c["word"], "")
         if not c["es"]:
             continue
-        c["example"], c["es_example"] = buscar_ejemplo(c["word"], pool_frases)
+        c["audio"] = audios.get(c["word"], "")
+        c["example"], c["es_example"] = ejemplos.de(c["word"])
         out.append(c)
         if len(out) >= 100:
             break
@@ -258,55 +386,77 @@ def palabras_de(seeds, conocidas, pool_frases, tomadas):
     return out
 
 
+# ---------- guardar sin perder datos buenos ----------
+def leer(nombre, defecto):
+    try:
+        return json.loads((DATA / nombre).read_text(encoding="utf-8"))
+    except Exception:
+        return defecto
+
+
+def escribir(nombre, datos):
+    (DATA / nombre).write_text(json.dumps(datos, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+
+
 def main():
     html = (ROOT / "index.html").read_text(encoding="utf-8")
     vocab = sorted(set(re.findall(r'\["([a-z][a-z\']+)","/', html)))
-    print(f"Palabras de la app: {len(vocab)}", flush=True)
+    log(f"Palabras de la app: {len(vocab)}")
+    cargar_cache()
+    log(f"Memoria: {sum(1 for v in cache['es'].values() if v[0])} traducciones, "
+        f"{sum(1 for v in cache['audio'].values() if v[0])} voces")
 
-    # reutilizar traducciones de la semana anterior para ir más rápido
-    try:
-        for lst in json.loads((DATA / "palabras.json").read_text(encoding="utf-8")).values():
-            for c in lst:
-                if c.get("es"):
-                    trad_cache[c["word"]] = c["es"]
-    except Exception:
-        pass
-
-    print("Banco general…", flush=True)
+    # 1) banco general
+    t = time.monotonic()
     banco = banco_general()
     if len(banco) >= 200 or not (DATA / "banco.json").exists():
-        (DATA / "banco.json").write_text(json.dumps(banco, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    print("  banco:", len(banco), "frases", flush=True)
+        escribir("banco.json", banco)
+    else:
+        banco = leer("banco.json", [])
+    log(f"Banco general: {len(banco)} frases ({time.monotonic() - t:.0f} s)")
 
-    frases = {}
+    # 2) frases por tema (se parte de los datos anteriores: un tema que falle conserva lo de antes)
+    t = time.monotonic()
+    frases = leer("frases.json", {})
     for topic, seeds in TOPIC_SEEDS.items():
-        frases[topic] = frases_de(seeds[:6])
-        print(f"Frases {topic}: {len(frases[topic])}", flush=True)
-    pool_frases = banco + [x for l in frases.values() for x in l]
+        if not queda_tiempo(10 * 60):
+            log("  (sin tiempo: se conservan las frases anteriores de los temas que faltan)")
+            break
+        nuevas = frases_de(seeds[:6])
+        if len(nuevas) >= 20 or topic not in frases:
+            frases[topic] = nuevas
+        log(f"Frases {topic}: {len(frases[topic])}")
+    escribir("frases.json", frases)
+    log(f"  frases listas ({time.monotonic() - t:.0f} s)")
 
-    palabras, tomadas = {}, set()
+    # 3) palabras por tema, guardando el avance tema por tema
+    ejemplos = Ejemplos(banco + [x for l in frases.values() for x in l])
+    palabras = leer("palabras.json", {})
+    tomadas = set()
     for topic, seeds in TOPIC_SEEDS.items():
-        palabras[topic] = palabras_de(seeds, set(vocab), pool_frases, tomadas)
-        print(f"Palabras {topic}: {len(palabras[topic])} (con voz real: {sum(1 for c in palabras[topic] if c['audio'])})", flush=True)
+        if not queda_tiempo(3 * 60):
+            log("  (sin tiempo: se conservan las palabras anteriores de los temas que faltan)")
+            break
+        t = time.monotonic()
+        nuevas = palabras_de(seeds, set(vocab), ejemplos, tomadas)
+        if len(nuevas) >= 20 or topic not in palabras:
+            palabras[topic] = nuevas
+        log(f"Palabras {topic}: {len(palabras[topic])} (con voz real: "
+            f"{sum(1 for c in palabras[topic] if c['audio'])}) ({time.monotonic() - t:.0f} s)")
+        escribir("palabras.json", palabras)
+        guardar_cache()
 
+    # 4) voces para las palabras escritas a mano y las descargadas
     pron = {w: {"audio": u} for w, u in voces_reales(vocab).items()}
     for lst in palabras.values():
         for r in lst:
-            if r["audio"]:
-                pron[r["word"]] = {"audio": r["audio"], "ipa": r["ipa"]}
-
-    # No reemplazar datos buenos con una descarga vacía (si una fuente estuvo caída)
-    def guardar(nombre, nuevo, minimo):
-        p = DATA / nombre
-        if sum(len(v) for v in nuevo.values()) < minimo and p.exists():
-            print("  ", nombre, "vino casi vacío; se conserva la versión anterior")
-            return
-        p.write_text(json.dumps(nuevo, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-
-    guardar("frases.json", frases, 40)
-    guardar("palabras.json", palabras, 80)
-    guardar("pronunciacion.json", pron, 10)
-    print("Listo:", sum(map(len, frases.values())), "frases,", sum(map(len, palabras.values())), "palabras,", len(pron), "pronunciaciones", flush=True)
+            if r.get("audio"):
+                pron[r["word"]] = {"audio": r["audio"], "ipa": r.get("ipa", "")}
+    if len(pron) >= 10 or not (DATA / "pronunciacion.json").exists():
+        escribir("pronunciacion.json", pron)
+    guardar_cache()
+    log("Listo:", sum(map(len, frases.values())), "frases,", sum(map(len, palabras.values())), "palabras,",
+        len(pron), "pronunciaciones,", len(banco), "en el banco general", f"— total {time.monotonic() - INICIO:.0f} s")
 
 
 if __name__ == "__main__":
